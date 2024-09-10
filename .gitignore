@@ -1,0 +1,16 @@
+/.idea
+/.ipynb_checkpoints
+/.vscode
+/Data
+/Solvers
+/Writings
+/Code/.ipynb_checkpoints
+/Code/Archive
+/Code/Forecasting_module
+/Code/Optimization_module
+# Ignore Python bytecode files
+*.pyc
+__pycache__/
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+/Code/SeriesOpt/tests

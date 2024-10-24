@@ -30,12 +30,14 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
     model.Md = Param(initialize=Md)
     model.Me = Param(initialize=Me)
     model.Eta = Param(initialize=eta)
+    M = 1e6
 
     model.Price = Param(model.PERIODS, initialize=p_forecast)
     
     ### variables ###
     model.controls = Var(model.PERIODS,within=Reals)
     model.impact_to_grid = Var(model.PERIODS,within=Reals)
+    model.z = Var(model.PERIODS,within=Binary) # 1 if charging, 0 if discharging
     
     ### inner rule definitions ###    
     def storage_charging_cap(model,period):
@@ -58,11 +60,24 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
                                     + model.controls[period-1])
         return charging_state
 
-    def impact_to_grid_charging_bound(model,period):
-        return model.impact_to_grid[period] >= model.controls[period] / model.Eta
+    def impact_to_grid_charging_lower_bound(model,period):
+        return model.impact_to_grid[period] >= model.controls[period] / model.Eta - M * (1 - model.z[period])
     
-    def impact_to_grid_discharging_bound(model,period):
-        return model.impact_to_grid[period] >= model.controls[period] * model.Eta
+    def impact_to_grid_charging_upper_bound(model,period):
+        return model.impact_to_grid[period] <= model.controls[period] / model.Eta + M * (1 - model.z[period])
+    
+    def impact_to_grid_discharging_lower_bound(model,period):
+        return model.impact_to_grid[period] >= model.controls[period] * model.Eta - M * model.z[period]
+    
+    def impact_to_grid_discharging_upper_bound(model,period):
+        return model.impact_to_grid[period] <= model.controls[period] * model.Eta + M * model.z[period]
+    
+    # Ensuring that if controls is positive, z = 1; if controls is negative, z = 0
+    def control_sign_charging(model,period):
+        return model.controls[period] >= -M * (1 - model.z[period])
+    
+    def control_sign_discharging(model,period):
+        return model.controls[period] <= M * model.z[period]
     
     def obj_func(model):
         return sum(model.impact_to_grid[period] * model.Price[period]
@@ -77,8 +92,12 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
     model.Storage_Discharging_Cap = Constraint(model.PERIODS, rule=storage_discharging_cap)
     model.Storage_Charging_Ene = Constraint(model.PERIODS, rule=storage_charging_ene)
     model.Storage_Discharging_Ene = Constraint(model.PERIODS, rule=storage_discharging_ene)
-    model.Grid_Impact_Charging = Constraint(model.PERIODS, rule=impact_to_grid_charging_bound)
-    model.Grid_Impact_Discharging = Constraint(model.PERIODS, rule=impact_to_grid_discharging_bound)
+    model.Grid_Impact_Charging_Lower = Constraint(model.PERIODS, rule=impact_to_grid_charging_lower_bound)
+    model.Grid_Impact_Charging_Upper = Constraint(model.PERIODS, rule=impact_to_grid_charging_upper_bound)
+    model.Grid_Impact_Discharging_Lower = Constraint(model.PERIODS, rule=impact_to_grid_discharging_lower_bound)
+    model.Grid_Impact_Discharging_Upper = Constraint(model.PERIODS, rule=impact_to_grid_discharging_upper_bound)
+    model.Control_Sign_Charging = Constraint(model.PERIODS, rule=control_sign_charging)
+    model.Control_Sign_Discharging = Constraint(model.PERIODS, rule=control_sign_discharging)
     
     ### objective ###
     model.obj = Objective(rule=obj_func)
@@ -103,7 +122,7 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
 if __name__ == "__main__":
     # Example usage
     b0 = 0
-    p_forecast = np.array([10, 20, 10, 10, 20])
+    p_forecast = np.array([10, 20, 10, -10, 20])
     H = 5
     
     control_results = lp_optimize(b0, p_forecast, H)

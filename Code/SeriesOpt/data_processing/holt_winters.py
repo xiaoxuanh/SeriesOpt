@@ -1,5 +1,10 @@
 import numpy as np
 import pandas as pd
+from ..config import Config
+
+alpha = Config.get_param('alpha')
+beta = Config.get_param('beta')
+gamma = Config.get_param('gamma')
 
 class HW_model:
     def __init__(self, m, l0=None, d0=None, s0=None, season_index0=None):
@@ -17,10 +22,13 @@ class HW_model:
         self.cur_l = l0
         self.cur_d = d0
         self.cur_s = s0
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
         self.cur_season_index = 0 if season_index0==None else season_index0
 
-    def fit(self, train, alpha, beta, gamma):
+    def fit(self, train):
         """
         train: training data, time series
         h: forecast horizon
@@ -28,10 +36,6 @@ class HW_model:
         alpha, beta, gamma: update parameters
         """
         self.train = train
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-
         n = len(self.train)
         fitted = np.zeros(n)
         y = np.array(self.train)
@@ -105,7 +109,7 @@ class HW_model:
         self.cur_season_index = season_index
 
 
-    def generate_series(self, n_periods, sigma, random_level=False, random_trend=False, random_seasonality=False):
+    def generate_series(self, n_periods, sigma):
         """
         Generates a synthetic Holt-Winters style time series with random level, trend, and seasonality (optional).
         
@@ -115,9 +119,6 @@ class HW_model:
         - self.cur_d: Trend slope for each period.
         - self.cur_s: List of seasonal effects.
         - sigma: Standard deviation of the noise.
-        - random_level: Apply randomness to the level.
-        - random_trend: Apply randomness to the trend.
-        - random_seasonality: Apply randomness to the seasonality.
         
         Returns:
         - synthetic_series: Generated time series as a numpy array with seasonality index, seasonality value, level, and trend.
@@ -126,32 +127,32 @@ class HW_model:
         synthetic_series = []
 
         for t in range(n_periods):
-            # Update level and trend based on specified randomness
-            if random_level:
-                self.cur_l = self.cur_l * np.random.uniform(0.9, 1.1)
-            if random_trend:
-                self.cur_d = self.cur_d * np.random.uniform(0.9, 1.1)
-            
-            # Optionally randomize each seasonality value
-            seasonality_index = (t + self.cur_season_index + 1) % self.m
-            if random_seasonality:
-                self.cur_s[seasonality_index] *= np.random.uniform(0.9, 1.1)
-            
             # Calculate the value at time t
-            self.cur_l = self.cur_l + self.cur_d
-            value = self.cur_l + self.cur_s[seasonality_index] + np.random.normal(0, sigma)
+            epsilon = np.random.normal(0, sigma)
+            value = self.cur_l + self.cur_d + self.cur_s[self.cur_season_index] + epsilon
+            synthetic_series.append((self.cur_season_index, self.cur_l, self.cur_d, 
+                                 self.cur_s[self.cur_season_index], 
+                                 value))
             
-            # Append the result with seasonality index, seasonality value, level, and trend
-            synthetic_series.append((seasonality_index, self.cur_l, self.cur_d, self.cur_s[seasonality_index], value))
+            # update level
+            self.cur_l = self.cur_l + self.cur_d + self.alpha * epsilon
+            self.cur_s[self.cur_season_index] = self.cur_s[self.cur_season_index] + self.cur_d*epsilon*self.gamma
+            self.cur_d = self.cur_d + self.alpha*self.beta * epsilon
+            self.cur_season_index = (self.cur_season_index + 1) % self.m
 
         # Convert to pandas DataFrame for easier manipulation
         synthetic_series = np.array(synthetic_series, dtype=[('seasonality_index', 'i4'), 
-                                                        ('seasonality_value', 'f4'), 
                                                         ('level', 'f4'), 
-                                                        ('trend', 'f4'), 
+                                                        ('trend', 'f4'),
+                                                        ('seasonality_value', 'f4'),  
                                                         ('value', 'f4')])
         synthetic_series = pd.DataFrame(synthetic_series, columns=['seasonality_index', 'level', 'trend', 'seasonality_value', 'value'])
 
         return synthetic_series
 
 
+if __name__ == "__main__":
+    x0 = [30, 0, -30, 10, -40, -20]
+    ts_instance = HW_model(4, x0[0],x0[1],x0[2:],0) # reset the state
+    series = ts_instance.generate_series(8, 10)
+    print(series)

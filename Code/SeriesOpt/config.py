@@ -17,7 +17,7 @@ class Config:
         'sigma': 10,
         # parameters for periodic optimization
         'reopt_freq': 4, # re-optimization frequency, no larger than opt_horizon
-        'opt_horizon': 5,
+        'opt_horizon': 8, # optimization horizon
         # parameters for DP optimizer
         'max_num_b_states': 4, # number of b states for discretization
         'max_b_step_size': 1, # maximum step size for b states; the smaller the steps the more number of states

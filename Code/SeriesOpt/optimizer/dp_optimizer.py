@@ -46,39 +46,107 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
         """
         coef: p/eta or p*eta
         """
+        wi = np.array(wi)
+        yi = np.array(yi)
 
-        # compute potential v and corresponding coeffiyients of b and u values
-        # in order, store optimal value, optimal control, b coef of v function, intercept of v function
+        # Compute wi - coef once
+        wi_minus_coef = wi - coef
+
+        min_pos_mask = wi_minus_coef > 0
+        # Handle positive part (wi - coef > 0)
         if upper_u == Me - b:
-            min_pos = [[(wi_i - coef)*upper_u + b*wi_i + yi_i, upper_u, 
-                        coef, yi_i+(wi_i-coef)*Me] for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0]
+            min_pos = np.column_stack([
+                wi_minus_coef[min_pos_mask] * upper_u + b * wi[min_pos_mask] + yi[min_pos_mask],
+                np.full(np.sum(min_pos_mask), upper_u),  # Fill with upper_u
+                np.full(np.sum(min_pos_mask), coef),
+                yi[min_pos_mask] + wi_minus_coef[min_pos_mask] * Me
+            ])
         else:
-            min_pos = [[(wi_i - coef)*upper_u + b*wi_i + yi_i, upper_u, 
-                        wi_i, yi_i+(wi_i-coef)*upper_u] for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0]
-        
-        if lower_u == -b:
-            min_neg = [[(wi_j - coef)*lower_u + b*wi_j + yi_j, lower_u, coef, yi_j] for wi_j, yi_j in zip(wi, yi) if wi_j - coef < 0]
-        else:
-            min_neg = [[(wi_j - coef)*lower_u + b*wi_j + yi_j, lower_u, 
-                        wi_j, yi_j+(wi_j-coef)*lower_u] for wi_j, yi_j in zip(wi, yi) if wi_j - coef < 0]
-        
-        cross_terms = [
-        [b*coef + ((wi_i - coef) * yi_j - (wi_j - coef) * yi_i) / (wi_i - wi_j),
-        -b + (yi_j - yi_i) / (wi_i - wi_j),
-         coef, ((wi_i - coef) * yi_j - (wi_j - coef) * yi_i) / (wi_i - wi_j)]
-        for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0
-        for wi_j, yi_j in zip(wi, yi) if wi_j - coef <= 0
-    ]
+            min_pos = np.column_stack([
+                wi_minus_coef[min_pos_mask] * upper_u + b * wi[min_pos_mask] + yi[min_pos_mask],
+                np.full(np.sum(min_pos_mask), upper_u),
+                wi[min_pos_mask],
+                yi[min_pos_mask] + wi_minus_coef[min_pos_mask] * upper_u
+            ])
 
-        comwined = min_pos + min_neg + cross_terms
+        min_neg_mask = wi_minus_coef < 0
+        # Handle negative part (wi - coef < 0)
+        if lower_u == -b:
+            min_neg = np.column_stack([
+                wi_minus_coef[min_neg_mask] * lower_u + b * wi[min_neg_mask] + yi[min_neg_mask],
+                np.full(np.sum(min_neg_mask), lower_u),  # Fill with lower_u
+                np.full(np.sum(min_neg_mask), coef),
+                yi[min_neg_mask]
+            ])
+        else:
+            min_neg = np.column_stack([
+                wi_minus_coef[min_neg_mask] * lower_u + b * wi[min_neg_mask] + yi[min_neg_mask],
+                np.full(np.sum(min_neg_mask), lower_u),
+                wi[min_neg_mask],
+                yi[min_neg_mask] + wi_minus_coef[min_neg_mask] * lower_u
+            ])
+
+        # Handle cross terms (wi - coef > 0 and wi - coef < 0)
+        cross_mask_i = wi_minus_coef > 0
+        cross_mask_j = wi_minus_coef <= 0
+
+        wi_pos = wi[cross_mask_i]
+        yi_pos = yi[cross_mask_i]
+        wi_neg = wi[cross_mask_j]
+        yi_neg = yi[cross_mask_j]
+        wi_pos_minus_coef = wi_minus_coef[cross_mask_i]
+        wi_neg_minus_coef = wi_minus_coef[cross_mask_j]
+
+        if wi_pos.size > 0 and wi_neg.size > 0:
+            wi_diff = wi_pos[:, None] - wi_neg  # (broadcasted subtraction)
+            yi_diff = yi_neg - yi_pos[:, None]
+
+            cross_terms = np.column_stack([
+                (b * coef + (wi_pos_minus_coef[:, None] * yi_neg - wi_neg_minus_coef * yi_pos[:, None]) / wi_diff).reshape(-1),
+                (-b + yi_diff / wi_diff).reshape(-1),
+                np.full(wi_diff.size, coef),
+                ((wi_pos_minus_coef[:, None] * yi_neg - wi_neg_minus_coef * yi_pos[:, None]) / wi_diff).reshape(-1)
+            ]) 
+        else:
+            cross_terms = np.empty((0, 4))  # Handle cases where there are no cross terms
+
+        # Combine all terms
+        combined = np.vstack([min_pos, min_neg, cross_terms])
+
+    #     # compute potential v and corresponding coeffiyients of b and u values
+    #     # in order, store optimal value, optimal control, b coef of v function, intercept of v function
+    #     if upper_u == Me - b:
+    #         min_pos = [[(wi_i - coef)*upper_u + b*wi_i + yi_i, upper_u, 
+    #                     coef, yi_i+(wi_i-coef)*Me] for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0]
+    #     else:
+    #         min_pos = [[(wi_i - coef)*upper_u + b*wi_i + yi_i, upper_u, 
+    #                     wi_i, yi_i+(wi_i-coef)*upper_u] for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0]
+        
+    #     if lower_u == -b:
+    #         min_neg = [[(wi_j - coef)*lower_u + b*wi_j + yi_j, lower_u, coef, yi_j] for wi_j, yi_j in zip(wi, yi) if wi_j - coef < 0]
+    #     else:
+    #         min_neg = [[(wi_j - coef)*lower_u + b*wi_j + yi_j, lower_u, 
+    #                     wi_j, yi_j+(wi_j-coef)*lower_u] for wi_j, yi_j in zip(wi, yi) if wi_j - coef < 0]
+        
+    #     cross_terms = [
+    #     [b*coef + ((wi_i - coef) * yi_j - (wi_j - coef) * yi_i) / (wi_i - wi_j),
+    #     -b + (yi_j - yi_i) / (wi_i - wi_j),
+    #      coef, ((wi_i - coef) * yi_j - (wi_j - coef) * yi_i) / (wi_i - wi_j)]
+    #     for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0
+    #     for wi_j, yi_j in zip(wi, yi) if wi_j - coef <= 0
+    # ]
+
+        # combined = min_pos + min_neg + cross_terms
         
         # Find the minimum first element and corresponding second element
-        v_star, _, corresponding_b_coef, corresponding_intercept = min(comwined, key=lambda x: x[0])
+        v_star, u_star, corresponding_b_coef, corresponding_intercept = min(combined, key=lambda x: x[0])
         # Do the following because when there is w_i - coef = 0, the corresponding u value is not unique
-        if cross_terms:
-            u_star = max(lower_u, min(upper_u, min(cross_terms, key=lambda x: x[0])[1]))
-        else:
-            u_star = _
+        # if cross_terms:
+        #     u_star = max(lower_u, min(upper_u, min(cross_terms, key=lambda x: x[0])[1]))
+        # else:
+        #     u_star = _
+        if cross_terms.size > 0:
+            u_star = np.clip(np.min(cross_terms[:, 1]), lower_u, upper_u)
         
         return v_star, u_star, corresponding_b_coef, corresponding_intercept
     
@@ -89,30 +157,21 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
     # print(v_star_neg, u_star_neg, b_coef_neg)
     
     # Optimal solution
-    if v_star_pos > v_star_neg:
-        v_star = v_star_pos
-        u_star = u_star_pos
-        b_coef = b_coef_pos
-        intercept = intercept_pos
-    elif v_star_pos < v_star_neg:
+    if v_star_pos < v_star_neg or (v_star_pos == v_star_neg and b == 0):
         v_star = v_star_neg
         u_star = u_star_neg
         b_coef = b_coef_neg
         intercept = intercept_neg
+
     else:
+        v_star = v_star_pos
+        u_star = u_star_pos
+        b_coef = b_coef_pos
+        intercept = intercept_pos
+    
         # if the two values are equal, when b=Me, choose the positive side value because you can only approximate
         # Me from charging side, and when b=0, choose the negative side value; 
         # otherwise, choose the positive side value b/c the coefficient and intercept would be the same
-        if b == 0:
-            v_star = v_star_neg
-            u_star = u_star_neg
-            b_coef = b_coef_neg
-            intercept = intercept_neg
-        else:
-            v_star = v_star_pos
-            u_star = u_star_pos
-            b_coef = b_coef_pos
-            intercept = intercept_pos
 
     # return four decimal places for the optimal values
     return round(v_star, 4), round(u_star, 4), round(b_coef, 4), round(intercept, 4)
@@ -207,16 +266,22 @@ def _generate_memo(x0, season_index0) -> dict:
         t_values = np.round(t_values).astype(int)
 
         s_values = []
+        cur_season_index = (season_index0 + k) % m
+        relevant_seasons = [(cur_season_index + j) % m for j in range(opt_horizon - k)] # for the last few periods, some seasons are irrelevant for the optimal control
         for i in range(0, m):
-            r = np.floor((k - 1 - ((i - season_index0 + m) % m)) / m) + 1 # number of updates of season index i as of period k
-            variance_term_s = np.sqrt(r + alpha**2 * beta**2 * (r * ((i - season_index0 + m) % m) + (m / 2) * r * (r - 1))) * sigma
-            smin = s0[i] + t0 * r - 2 * variance_term_s
-            smax = s0[i] + t0 * r + 2 * variance_term_s
-            num_s_states = min(max_num_x_states, int((smax - smin) / max_x_step_size) + 1)
-            if num_s_states > 1:
-                s_values.append(np.linspace(smin, smax, num_s_states))
+            delta_i = (i - season_index0 + m) % m
+            r = np.floor((k - 1 - delta_i) / m) + 1 # number of updates of season index i as of period k
+            if i in relevant_seasons:
+                variance_term_s = np.sqrt(r + alpha**2 * beta**2 * (r * delta_i + (m / 2) * r * (r - 1))) * sigma
+                smin = s0[i] + t0 * r - 2 * variance_term_s
+                smax = s0[i] + t0 * r + 2 * variance_term_s
+                num_s_states = min(max_num_x_states, int((smax - smin) / max_x_step_size) + 1)
             else:
-                s_values.append([s0[i] + t0 * r])
+                num_s_states = 1
+                smin = smax = s0[i] + t0 * r
+            
+            s_values.append(np.linspace(smin, smax, num_s_states))
+            
         s_values = [np.round(s).astype(int) for s in s_values]
 
         # Create all combinations of the datapoints for each k
@@ -290,22 +355,23 @@ def dp_optimize(x0, season_index0) -> dict:
 
 if __name__ == '__main__':
     import time
-    # start = time.time()
-    # # Initialize the memo dictionary
-    # memo, policy = dp_optimize([30, 0, -30, 10, -40, -20],0)
-    # # # Initialize the policy dictionary
-    # # policy = {}
-    # # # Solve the optimization problem for each xk state
-    # # _solve_xk(0, 3, 0, [100, 0, 0, 0, 0, 0, 0], memo, policy)
-    # # print(policy)
+    start = time.time()
+    # Initialize the memo dictionary
+    memo, policy = dp_optimize([30, 0, -30, 10, -40, -20],0)
+    # # Initialize the policy dictionary
+    # policy = {}
+    # # Solve the optimization problem for each xk state
+    # _solve_xk(0, 3, 0, [100, 0, 0, 0, 0, 0, 0], memo, policy)
+    # print(policy)
 
-    # # print memo keys in separate lines, one key per line
-    # for subkey, subitem in memo[4].items():
-    #     print(subkey, subitem)
+    # print memo keys in separate lines, one key per line
+    for key, item in memo.items():
+        for subkey, subitem in item.items():
+            print(key, subkey, subitem)
     
-    # # # print policy keys in separate lines, one key per line
-    # # for key, item in policy.items():
-    # #     print(key, item)
+    # # print policy keys in separate lines, one key per line
+    # for key, item in policy.items():
+    #     print(key, item)
     
-    # print(f"Time taken: {time.time()-start} seconds")
-    _single_step_opt(4, [76.5, 0, 0],[0, 382.5, 382.5],80)
+    print(f"Time taken: {time.time()-start} seconds")
+    # _single_step_opt(4, [76.5, 0, 0],[0, 382.5, 382.5],80)

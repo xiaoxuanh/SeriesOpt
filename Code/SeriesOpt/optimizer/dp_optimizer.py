@@ -5,6 +5,7 @@ from scipy.stats import norm
 from itertools import product
 from collections import defaultdict
 from ..config import Config
+from multiprocessing import Pool
 
 Me = Config.get_param('Me')
 Mc = Config.get_param('Mc')
@@ -292,6 +293,26 @@ def _generate_memo(x0, season_index0) -> dict:
     
     return memo
 
+def _solve_xk(args):
+    """
+    Solve the optimization problem for a given xk state; worker function for parallel processing
+    """
+    k, xk, memo, b_states, cur_season_index = args
+    l, t, *s = xk
+    pk = l + t + s[cur_season_index]
+    
+    # Compute w_i and y_i
+    w_i, y_i = _compute_wi_yi(k, cur_season_index, xk, memo)
+    
+    temp_results = []
+    for b in b_states:
+        # Solve single-step optimization
+        _, u_star, b_coef, intercept = _single_step_opt(b, w_i, y_i, pk)
+        # Store results
+        temp_results.append((xk, b, (b_coef, intercept), u_star))
+    return temp_results
+
+
 def dp_optimize(x0, season_index0) -> dict:
     """
     Dynamic programming optimization
@@ -319,22 +340,22 @@ def dp_optimize(x0, season_index0) -> dict:
     # Solve the optimization problem for each xk state
     for k in reversed(range(opt_horizon)):
         cur_season_index = (season_index0 + k) % m
-        temp_memo = []
+        arg_list = []
         for xk in memo[k].keys():
             if xk == 'num_intervals':
                 continue
-            else:
-                # Unpack the state variables
-                l, t, s = xk[0], xk[1], xk[2:]
-                pk = l + t + s[cur_season_index] #TODO: consider making this more general later to suit other price models
-                # compute the slopes and intercepts for the J function
-                w_i, y_i = _compute_wi_yi(k, cur_season_index, xk, memo)
+            arg_list.append((k, xk, memo, b_states, cur_season_index))
+            
+        with Pool() as pool:
+            results = pool.map(_solve_xk, arg_list)
 
-                for b in b_states:
-                    # solve the single-step optimization problem
-                    _, u_star, b_coef, intercept = _single_step_opt(b, w_i, y_i, pk)
-                    policy[(k, xk, b)] = u_star
-                    temp_memo.append([xk, b, (b_coef, intercept)])
+        # Store the results in the memo and policy dictionaries
+        temp_memo = []
+        for result in results:
+            for temp_result in result:
+                xk, b, b_coef_intercept, u_star = temp_result
+                policy[(k, xk, b)] = u_star
+                temp_memo.append([xk, b, b_coef_intercept])
         # for each b, get the list of pairs of b_coef and intercept
         temp_memo = pd.DataFrame(temp_memo, columns=['xk', 'b', 'b_coef_intercept'])
         param_list = temp_memo.groupby('b')['b_coef_intercept'].apply(set).reset_index()

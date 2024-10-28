@@ -109,7 +109,7 @@ class HW_model:
         self.cur_season_index = season_index
 
 
-    def generate_series(self, n_periods, sigma):
+    def generate_series(self, n_periods, randomness_model):
         """
         Generates a synthetic Holt-Winters style time series with random level, trend, and seasonality (optional).
         
@@ -118,7 +118,6 @@ class HW_model:
         - self.cur_l: Initial level of the series.
         - self.cur_d: Trend slope for each period.
         - self.cur_s: List of seasonal effects.
-        - sigma: Standard deviation of the noise.
         
         Returns:
         - synthetic_series: Generated time series as a numpy array with seasonality index, seasonality value, level, and trend.
@@ -128,7 +127,7 @@ class HW_model:
 
         for t in range(n_periods):
             # Calculate the value at time t
-            epsilon = np.random.normal(0, sigma)
+            epsilon = randomness_model.sample()
             value = self.cur_l + self.cur_d + self.cur_s[self.cur_season_index] + epsilon
             synthetic_series.append((self.cur_season_index, self.cur_l, self.cur_d, 
                                  self.cur_s[self.cur_season_index], 

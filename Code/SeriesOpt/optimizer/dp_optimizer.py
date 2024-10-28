@@ -4,7 +4,8 @@ from scipy.integrate import quad
 from scipy.stats import norm
 from itertools import product
 from collections import defaultdict
-from ..config import Config
+from SeriesOpt.config import Config
+from SeriesOpt.data_processing.randomness_models import *
 from multiprocessing import Pool
 
 Me = Config.get_param('Me')
@@ -43,7 +44,7 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
     upper_u = min(Mc, Me - b)
     lower_u = max(-Md, -b)
 
-    def _solve_sub_problem(wi, yi, lower_u, upper_u, coef, b):
+    def _solve_sub_problem(wi, yi, lower_u, upper_u, coef, b, is_negative = False):
         """
         coef: p/eta or p*eta
         """
@@ -52,10 +53,17 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
 
         # Compute wi - coef once
         wi_minus_coef = wi - coef
+        if is_negative:
+            # Adjust masks for discharging
+            min_pos_mask = wi_minus_coef > 0
+            min_neg_mask = wi_minus_coef <= 0
+        else:
+            # Masks for charging
+            min_pos_mask = wi_minus_coef >= 0
+            min_neg_mask = wi_minus_coef < 0
 
-        min_pos_mask = wi_minus_coef > 0
-        # Handle positive part (wi - coef > 0)
-        if upper_u == Me - b:
+        # Handle positive part
+        if upper_u == Me - b and not is_negative:
             min_pos = np.column_stack([
                 wi_minus_coef[min_pos_mask] * upper_u + b * wi[min_pos_mask] + yi[min_pos_mask],
                 np.full(np.sum(min_pos_mask), upper_u),  # Fill with upper_u
@@ -70,9 +78,8 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
                 yi[min_pos_mask] + wi_minus_coef[min_pos_mask] * upper_u
             ])
 
-        min_neg_mask = wi_minus_coef < 0
-        # Handle negative part (wi - coef < 0)
-        if lower_u == -b:
+        # Handle negative part
+        if lower_u == -b and is_negative:
             min_neg = np.column_stack([
                 wi_minus_coef[min_neg_mask] * lower_u + b * wi[min_neg_mask] + yi[min_neg_mask],
                 np.full(np.sum(min_neg_mask), lower_u),  # Fill with lower_u
@@ -89,7 +96,7 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
 
         # Handle cross terms (wi - coef > 0 and wi - coef < 0)
         cross_mask_i = wi_minus_coef > 0
-        cross_mask_j = wi_minus_coef <= 0
+        cross_mask_j = wi_minus_coef < 0
 
         wi_pos = wi[cross_mask_i]
         yi_pos = yi[cross_mask_i]
@@ -113,48 +120,31 @@ def _single_step_opt(b, w_i, y_i, p) -> tuple:
 
         # Combine all terms
         combined = np.vstack([min_pos, min_neg, cross_terms])
+        
+        ### Find the minimum v_star value and corresponding u_star, b_coef, and intercept.
+        ### If there are multiple optimal solutions, choose the one with the largest b_coef.
+        # Find the minimum v_star value
+        min_v_star = np.min(combined[:, 0])
+        # Get all rows where v_star equals min_v_star
+        min_v_rows = combined[np.abs(combined[:, 0] - min_v_star)<1e-6]
+        # From these, select the one with the largest or smallest b_coef (third element)
+        # if b is zero, choose the smallest b_coef; otherwise, choose the largest b_coef
+        if b == 0:
+            selected_row = min_v_rows[np.argmin(min_v_rows[:, 2])]
+        else:
+            selected_row = min_v_rows[np.argmax(min_v_rows[:, 2])]
+        # Unpack the selected row
+        v_star, u_star, corresponding_b_coef, corresponding_intercept = selected_row
 
-    #     # compute potential v and corresponding coeffiyients of b and u values
-    #     # in order, store optimal value, optimal control, b coef of v function, intercept of v function
-    #     if upper_u == Me - b:
-    #         min_pos = [[(wi_i - coef)*upper_u + b*wi_i + yi_i, upper_u, 
-    #                     coef, yi_i+(wi_i-coef)*Me] for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0]
-    #     else:
-    #         min_pos = [[(wi_i - coef)*upper_u + b*wi_i + yi_i, upper_u, 
-    #                     wi_i, yi_i+(wi_i-coef)*upper_u] for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0]
-        
-    #     if lower_u == -b:
-    #         min_neg = [[(wi_j - coef)*lower_u + b*wi_j + yi_j, lower_u, coef, yi_j] for wi_j, yi_j in zip(wi, yi) if wi_j - coef < 0]
-    #     else:
-    #         min_neg = [[(wi_j - coef)*lower_u + b*wi_j + yi_j, lower_u, 
-    #                     wi_j, yi_j+(wi_j-coef)*lower_u] for wi_j, yi_j in zip(wi, yi) if wi_j - coef < 0]
-        
-    #     cross_terms = [
-    #     [b*coef + ((wi_i - coef) * yi_j - (wi_j - coef) * yi_i) / (wi_i - wi_j),
-    #     -b + (yi_j - yi_i) / (wi_i - wi_j),
-    #      coef, ((wi_i - coef) * yi_j - (wi_j - coef) * yi_i) / (wi_i - wi_j)]
-    #     for wi_i, yi_i in zip(wi, yi) if wi_i - coef > 0
-    #     for wi_j, yi_j in zip(wi, yi) if wi_j - coef <= 0
-    # ]
-
-        # combined = min_pos + min_neg + cross_terms
-        
-        # Find the minimum first element and corresponding second element
-        v_star, u_star, corresponding_b_coef, corresponding_intercept = min(combined, key=lambda x: x[0])
-        # Do the following because when there is w_i - coef = 0, the corresponding u value is not unique
-        # if cross_terms:
-        #     u_star = max(lower_u, min(upper_u, min(cross_terms, key=lambda x: x[0])[1]))
-        # else:
-        #     u_star = _
-        if cross_terms.size > 0:
-            u_star = np.clip(np.min(cross_terms[:, 1]), lower_u, upper_u)
+        # Ensure u_star is within bounds
+        u_star = np.clip(u_star, lower_u, upper_u)
         
         return v_star, u_star, corresponding_b_coef, corresponding_intercept
     
     # Solving sub-problems
-    v_star_pos, u_star_pos, b_coef_pos, intercept_pos = _solve_sub_problem(w_i, y_i, 0, upper_u, p/eta, b)
+    v_star_pos, u_star_pos, b_coef_pos, intercept_pos = _solve_sub_problem(w_i, y_i, 0, upper_u, p/eta, b, is_negative=False)
     # print(v_star_pos, u_star_pos, b_coef_pos)
-    v_star_neg, u_star_neg, b_coef_neg, intercept_neg = _solve_sub_problem(w_i, y_i, lower_u, 0, p*eta, b)
+    v_star_neg, u_star_neg, b_coef_neg, intercept_neg = _solve_sub_problem(w_i, y_i, lower_u, 0, p*eta, b, is_negative=True)
     # print(v_star_neg, u_star_neg, b_coef_neg)
     
     # Optimal solution
@@ -186,13 +176,15 @@ def __hw_price_transition(xk, cur_season_index, epsilon):
     :return: Next states
     """
     l, t, *s = xk
+    s = np.array(s)
     t_new = t + alpha * beta * epsilon
     l_new = l + t + alpha * epsilon
-    s[cur_season_index] = s[cur_season_index] + gamma*(epsilon + t)
+    s_new = s.copy()
+    s_new[cur_season_index] = s[cur_season_index] + gamma*(epsilon + t)
     
-    return (l_new, t_new, *s)
+    return (l_new, t_new, *s_new)
 
-def __integrand(z, interval, component, next_x_dict, memo, k, cur_season_index, xk):
+def __integrand(z, interval, component, next_x_dict, memo, k, cur_season_index, xk, randomness_model):
     """
     For a given z and component (0 for f and 1 for g), 
     return the integrand value
@@ -209,9 +201,9 @@ def __integrand(z, interval, component, next_x_dict, memo, k, cur_season_index, 
         keys.remove('num_intervals')
         next_x = min([x for x in keys], key=lambda x: np.linalg.norm(np.array(x) - np.array(next_x)))
         func_value = memo[k+1][next_x][interval][component]
-    return func_value * norm.pdf(z, scale=sigma)
+    return func_value * randomness_model.pdf(z)
 
-def _compute_wi_yi(k, cur_season_index, xk, memo) -> tuple:
+def _compute_wi_yi(k, cur_season_index, xk, memo, randomness_model) -> tuple:
     """
     Integrate the values of f and g functions from period k+1 over epsilon for x_k
 
@@ -222,23 +214,78 @@ def _compute_wi_yi(k, cur_season_index, xk, memo) -> tuple:
         return [0], [0]
     
     else:
-        results = []
         next_x_dict = {}
-    
-        for i in range(memo[k+1]['num_intervals']):
-            f_integral, _ = quad(lambda z: __integrand(z, i, 0, next_x_dict, memo, k, cur_season_index, xk), -np.inf, np.inf)
-            g_integral, _ = quad(lambda z: __integrand(z, i, 1, next_x_dict, memo, k, cur_season_index, xk), -np.inf, np.inf)
-            results.append((f_integral, g_integral))
-        
+        num_intervals = memo[k+1]['num_intervals']
+
+        if isinstance(randomness_model, NormalRandomness):
+            results = []
+            for i in range(num_intervals):
+                f_integral, _ = quad(lambda z: __integrand(z, i, 0, next_x_dict, memo, k, cur_season_index, xk, randomness_model), -np.inf, np.inf)
+                g_integral, _ = quad(lambda z: __integrand(z, i, 1, next_x_dict, memo, k, cur_season_index, xk, randomness_model), -np.inf, np.inf)
+                results.append((f_integral, g_integral))
+        elif isinstance(randomness_model, DiscreteRandomness):
+            results = []
+            for i in range(num_intervals):
+                f_integral = sum([__integrand(z, i, 0, next_x_dict, memo, k, cur_season_index, xk, randomness_model) for z in randomness_model.values])
+                g_integral = sum([__integrand(z, i, 1, next_x_dict, memo, k, cur_season_index, xk, randomness_model) for z in randomness_model.values])
+                results.append((f_integral, g_integral))
+
         # separate the results into w and y
         w_i = [result[0] for result in results]
         y_i = [result[1] for result in results]
             
         return w_i, y_i
 
-def _generate_memo(x0, season_index0) -> dict:
+def _generate_memo_discrete(x0, season_index0, randomness_model) -> dict:
+    """
+    Generate a memoization dictionary containing the exact possible states for each time step,
+    given the initial state and a discrete randomness model.
+
+    :param x0: Initial state vector (l0, t0, s0).
+    :param season_index0: Initial season index.
+    :param randomness_model: An instance of DiscreteRandomness.
+    :return: memo, a dictionary storing possible states at each time step.
+    """
+    memo = defaultdict(dict)
+    initial_state = tuple(np.round(x0).astype(int))
+    memo[0][initial_state] = []
+    memo[0]['num_intervals'] = None  # Will be updated later if needed
+
+    # We need to keep track of the season index at each time step
+    season_indices = [(season_index0 + k) % m for k in range(opt_horizon)]
+
+    for k in range(opt_horizon - 1):
+        cur_season_index = season_indices[k]
+        memo[k + 1]['num_intervals'] = None  # Initialize for the next time step
+
+        # Determine relevant seasons for period k
+        # Relevant seasons are those that will be used in future periods
+        remaining_periods = opt_horizon - k - 1  # Periods remaining after current period
+        future_season_indices = [(cur_season_index + i) % m for i in range(remaining_periods + 1)]
+        relevant_seasons = set(future_season_indices)
+        mask = np.isin(np.arange(m), list(relevant_seasons), invert=True) # Mask for irrelevant seasons
+
+        # Iterate over all states at time k
+        for xk in memo[k]:
+            if xk == 'num_intervals':
+                continue
+            xk_list = list(xk)
+            # compute the mean next state when epsilon = 0
+            next_x_mean = list(__hw_price_transition(xk_list, cur_season_index, 0))
+            # For each possible value of epsilon, compute the next state
+            for epsilon in randomness_model.values:
+                next_x = list(__hw_price_transition(xk_list, cur_season_index, epsilon))
+                # override the season parameters with next_x_mean if the season is not relevant
+                next_x[2:2+m] = np.where(mask, next_x_mean[2:2+m], next_x[2:2+m])
+                next_x = tuple(np.round(next_x).astype(int))  # Round to integer values
+                if next_x not in memo[k + 1]:
+                    memo[k + 1][next_x] = []
+    return memo
+
+def __generate_memo_normal(x0, season_index0, randomness_model) -> dict:
     """
     Generate a dictionary to store the f and g function values for each xk state in each period
+    Tailored for normal randomness models
 
     :param x0: initial ts states
     """
@@ -246,7 +293,7 @@ def _generate_memo(x0, season_index0) -> dict:
     l0, t0, s0 = x0[0], x0[1], x0[2:]
 
     for k in range(opt_horizon):
-        l_variance_term = np.sqrt(beta**2 * (k*(k-1)*(2*k-1)/6) + beta * k*(k-1) + k) * alpha * sigma
+        l_variance_term = np.sqrt(beta**2 * (k*(k-1)*(2*k-1)/6) + beta * k*(k-1) + k) * alpha * randomness_model.sigma
         lmin = l0 + k * t0 - 2 * l_variance_term
         lmax = l0 + k * t0 + 2 * l_variance_term
         num_l_states = min(max_num_x_states, int((lmax - lmin) / max_x_step_size) + 1)
@@ -256,7 +303,7 @@ def _generate_memo(x0, season_index0) -> dict:
             l_values = [l0 + k * t0]
         l_values = np.round(l_values).astype(int)
 
-        t_variance_term = np.sqrt(k) * alpha * beta * sigma
+        t_variance_term = np.sqrt(k) * alpha * beta * randomness_model.sigma
         tmin = t0 - 2 * t_variance_term
         tmax = t0 + 2 * t_variance_term
         num_t_states = min(max_num_x_states, int((tmax - tmin) / max_x_step_size) + 1)
@@ -273,7 +320,7 @@ def _generate_memo(x0, season_index0) -> dict:
             delta_i = (i - season_index0 + m) % m
             r = np.floor((k - 1 - delta_i) / m) + 1 # number of updates of season index i as of period k
             if i in relevant_seasons:
-                variance_term_s = np.sqrt(r + alpha**2 * beta**2 * (r * delta_i + (m / 2) * r * (r - 1))) * sigma
+                variance_term_s = np.sqrt(r + alpha**2 * beta**2 * (r * delta_i + (m / 2) * r * (r - 1))) * randomness_model.sigma
                 smin = s0[i] + t0 * r - 2 * variance_term_s
                 smax = s0[i] + t0 * r + 2 * variance_term_s
                 num_s_states = min(max_num_x_states, int((smax - smin) / max_x_step_size) + 1)
@@ -293,16 +340,29 @@ def _generate_memo(x0, season_index0) -> dict:
     
     return memo
 
+def _generate_memo(x0, season_index0, randomness_model) -> dict:
+    """
+    Generate a dictionary to store the f and g function values for each xk state in each period
+
+    :param x0: initial ts states
+    """
+    if isinstance(randomness_model, NormalRandomness):
+        return __generate_memo_normal(x0, season_index0, randomness_model)
+    elif isinstance(randomness_model, DiscreteRandomness):
+        return _generate_memo_discrete(x0, season_index0, randomness_model)
+    else:
+        raise ValueError("Randomness model not supported")
+
 def _solve_xk(args):
     """
     Solve the optimization problem for a given xk state; worker function for parallel processing
     """
-    k, xk, memo, b_states, cur_season_index = args
+    k, xk, memo, b_states, cur_season_index, randomness_model = args
     l, t, *s = xk
     pk = l + t + s[cur_season_index]
     
     # Compute w_i and y_i
-    w_i, y_i = _compute_wi_yi(k, cur_season_index, xk, memo)
+    w_i, y_i = _compute_wi_yi(k, cur_season_index, xk, memo, randomness_model)
     
     temp_results = []
     for b in b_states:
@@ -313,7 +373,7 @@ def _solve_xk(args):
     return temp_results
 
 
-def dp_optimize(x0, season_index0) -> dict:
+def dp_optimize(x0, season_index0, randomness_model) -> dict:
     """
     Dynamic programming optimization
 
@@ -327,7 +387,7 @@ def dp_optimize(x0, season_index0) -> dict:
     policy: indexed by (k, xk, b), stores the optimal control action for the input states
     """
     # Initialize the memo dictionary
-    memo = _generate_memo(x0, season_index0)
+    memo = _generate_memo(x0, season_index0, randomness_model)
 
     # Initialize the policy dictionary
     policy = {}
@@ -344,7 +404,7 @@ def dp_optimize(x0, season_index0) -> dict:
         for xk in memo[k].keys():
             if xk == 'num_intervals':
                 continue
-            arg_list.append((k, xk, memo, b_states, cur_season_index))
+            arg_list.append((k, xk, memo, b_states, cur_season_index, randomness_model))
             
         with Pool() as pool:
             results = pool.map(_solve_xk, arg_list)
@@ -376,9 +436,19 @@ def dp_optimize(x0, season_index0) -> dict:
 
 if __name__ == '__main__':
     import time
+    from SeriesOpt.utils import *
+    import csv
+    import json
+
+    x0 = [30, 0, 0,10,11,1]
+    b0 = 0
+    Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
+                    'opt_horizon': 8})
     start = time.time()
+    randomness_model = DiscreteRandomness([-5, 0, 5], 
+                                      [0.2, 0.6, 0.2])
     # Initialize the memo dictionary
-    memo, policy = dp_optimize([30, 0, -30, 10, -40, -20],0)
+    memo, policy = dp_optimize(x0,0, randomness_model)
     # # Initialize the policy dictionary
     # policy = {}
     # # Solve the optimization problem for each xk state
@@ -394,5 +464,28 @@ if __name__ == '__main__':
     # for key, item in policy.items():
     #     print(key, item)
     
-    print(f"Time taken: {time.time()-start} seconds")
-    # _single_step_opt(4, [76.5, 0, 0],[0, 382.5, 382.5],80)
+    # print(f"Time taken: {time.time()-start} seconds")
+    # # _single_step_opt(4, [76.5, 0, 0],[0, 382.5, 382.5],80)
+
+    # # Writing the policy dictionary into a CSV file
+    # with open(get_results_path('dp_policy_H12_Me2Mc1_0random.csv'), mode='w', newline='') as file:
+    #     writer = csv.writer(file)
+        
+    #     # Write the header (adjust this based on your key structure)
+    #     writer.writerow(['period', 'level', 'trend', 'season1', 'season2', 'season3', 'season4', 'storage', 'control'])
+        
+    #     # Write each key-value pair into the CSV
+    #     for key, value in policy.items():
+    #         key1, key2, key3 = key  # Unpacking the main tuple
+    #         writer.writerow([key1, *key2, key3, value])
+
+    # # write the metadata for the csv file
+    # metadata = {'opt_horizon': opt_horizon,
+    #             'x0': x0,
+    #             'b0': b0,
+    #             'Me': Me,
+    #             'Mc': Mc,
+    #             'randomness': randomness_model.get_meta_data()}
+
+    # with open(get_results_path('dp_policy_H12_Me2Mc1_0random_metadata.json'), mode='w') as json_file:
+    #     json.dump(metadata, json_file, indent=4)

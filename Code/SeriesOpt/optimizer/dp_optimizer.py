@@ -176,7 +176,7 @@ def __hw_price_transition(xk, cur_season_index, epsilon):
     :return: Next states
     """
     l, t, *s = xk
-    s = np.array(s)
+    s = np.array(s, dtype=float)
     t_new = t + alpha * beta * epsilon
     l_new = l + t + alpha * epsilon
     s_new = s.copy()
@@ -247,7 +247,7 @@ def _generate_memo_discrete(x0, season_index0, randomness_model) -> dict:
     :return: memo, a dictionary storing possible states at each time step.
     """
     memo = defaultdict(dict)
-    initial_state = tuple(np.round(x0).astype(int))
+    initial_state = tuple(x0)
     memo[0][initial_state] = []
     memo[0]['num_intervals'] = None  # Will be updated later if needed
 
@@ -276,8 +276,11 @@ def _generate_memo_discrete(x0, season_index0, randomness_model) -> dict:
             for epsilon in randomness_model.values:
                 next_x = list(__hw_price_transition(xk_list, cur_season_index, epsilon))
                 # override the season parameters with next_x_mean if the season is not relevant
+                next_x_mean[2:2+m] = np.array(next_x_mean[2:2+m], dtype=float)
+                next_x[2:2+m] = np.array(next_x[2:2+m], dtype=float)
+                # Now apply the np.where logic
                 next_x[2:2+m] = np.where(mask, next_x_mean[2:2+m], next_x[2:2+m])
-                next_x = tuple(np.round(next_x).astype(int))  # Round to integer values
+                next_x = tuple(next_x)  # Round to integer values
                 if next_x not in memo[k + 1]:
                     memo[k + 1][next_x] = []
     return memo
@@ -439,30 +442,76 @@ if __name__ == '__main__':
     from SeriesOpt.utils import *
     import csv
     import json
+    from SeriesOpt.data_processing.holt_winters import HW_model
+    from SeriesOpt.data_processing.randomness_models import DiscreteRandomness
 
-    x0 = [30, 0, 0,10,11,1]
-    b0 = 0
     Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
-                    'opt_horizon': 8})
-    start = time.time()
-    randomness_model = DiscreteRandomness([-5, 0, 5], 
-                                      [0.2, 0.6, 0.2])
-    # Initialize the memo dictionary
-    memo, policy = dp_optimize(x0,0, randomness_model)
-    # # Initialize the policy dictionary
-    # policy = {}
-    # # Solve the optimization problem for each xk state
-    # _solve_xk(0, 3, 0, [100, 0, 0, 0, 0, 0, 0], memo, policy)
-    # print(policy)
+                   'opt_horizon': 8})
+    randomness_model = DiscreteRandomness([-10, -5, 0, 5, 10], [0.1, 0.2, 0.4, 0.2, 0.1])
+    b0 = 0
+    # randomly generate a x0 and solve for the optimal policy; do this for 50 times
+    for i in range(30):
+        level = np.random.randint(-10, 30)
+        trend = np.random.randint(-2,3)
+        season = [int(x) for x in np.random.randint(-5, 30, 4)]
+        x0 = [level, trend, *season]
+        print(f"Problem {i}: level = {level}, trend = {trend}, season = {season}")
+        ts_instance = HW_model(4, level, trend, season,0)
 
-    # print memo keys in separate lines, one key per line
-    for key, item in memo.items():
-        for subkey, subitem in item.items():
-            print(key, subkey, subitem)
+        # Run the DP optimizer to solve for optimal policy
+        start = time.time()
+        # Initialize the memo dictionary
+        memo, policy = dp_optimize(x0,0,randomness_model)
+        end = time.time()
+        print(f"Problem {i}: DP optimizer took {end-start} seconds to run")
+        
+        # Save the memo and policy to a file
+        # Writing the policy dictionary into a CSV file
+        with open(get_results_path(f'dp_experiment_{i}_H12.csv'), mode='w', newline='') as file:
+            writer = csv.writer(file)
+            
+            # Write the header (adjust this based on your key structure)
+            writer.writerow(['period', 'level', 'trend', 'season1', 'season2', 'season3', 'season4', 'storage', 'control'])
+            
+            # Write each key-value pair into the CSV
+            for key, value in policy.items():
+                key1, key2, key3 = key  # Unpacking the main tuple
+                writer.writerow([key1, *key2, key3, value])
+
+        # write the metadata for the csv file
+        metadata = {'opt_horizon': opt_horizon,
+                    'x0': x0,
+                    'b0': b0,
+                    'Me': Me,
+                    'Mc': Mc,
+                    'randomness_type': [int(x) for x in randomness_model.values],
+                    'randomness_prob': [float(x) for x in randomness_model.probabilities]}
+
+        with open(get_results_path(f'dp_experiment_{i}_H12_metadata.json'), mode='w') as json_file:
+            json.dump(metadata, json_file, indent=4)
+    # x0 = [30, 0, 0,10,11,1]
+    # b0 = 0
+    # Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
+    #                 'opt_horizon': 12})
+    # start = time.time()
+    # randomness_model = DiscreteRandomness([-5, 0, 5], 
+    #                                   [0.2, 0.6, 0.2])
+    # # Initialize the memo dictionary
+    # memo, policy = dp_optimize(x0,0, randomness_model)
+    # # # Initialize the policy dictionary
+    # # policy = {}
+    # # # Solve the optimization problem for each xk state
+    # # _solve_xk(0, 3, 0, [100, 0, 0, 0, 0, 0, 0], memo, policy)
+    # # print(policy)
+
+    # # print memo keys in separate lines, one key per line
+    # # for key, item in memo.items():
+    # #     for subkey, subitem in item.items():
+    # #         print(key, subkey, subitem)
     
-    # # print policy keys in separate lines, one key per line
-    # for key, item in policy.items():
-    #     print(key, item)
+    # # # print policy keys in separate lines, one key per line
+    # # for key, item in policy.items():
+    # #     print(key, item)
     
     # print(f"Time taken: {time.time()-start} seconds")
     # # _single_step_opt(4, [76.5, 0, 0],[0, 382.5, 382.5],80)

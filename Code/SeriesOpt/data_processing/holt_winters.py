@@ -100,7 +100,7 @@ class HW_model:
             prel = l
             l = self.alpha * (y[t] - s[season_index]) + (1 - self.alpha) * (prel + d)
             d = self.beta * (l - prel) + (1 - self.beta) * d
-            s[season_index] = self.gamma * (y[t] - l) + (1 - self.gamma) * s[season_index]
+            s[season_index] = self.gamma * (y[t] - prel) + (1 - self.gamma) * s[season_index]
             season_index = (season_index + 1) % self.m
 
         self.cur_l = l
@@ -135,7 +135,7 @@ class HW_model:
             
             # update level
             self.cur_l = self.cur_l + self.cur_d + self.alpha * epsilon
-            self.cur_s[self.cur_season_index] = self.cur_s[self.cur_season_index] + self.cur_d*epsilon*self.gamma
+            self.cur_s[self.cur_season_index] = self.cur_s[self.cur_season_index] + (self.cur_d+epsilon)*self.gamma
             self.cur_d = self.cur_d + self.alpha*self.beta * epsilon
             self.cur_season_index = (self.cur_season_index + 1) % self.m
 

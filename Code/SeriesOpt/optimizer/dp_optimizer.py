@@ -180,7 +180,7 @@ def __hw_price_transition(xk, cur_season_index, epsilon):
     t_new = t + alpha * beta * epsilon
     l_new = l + t + alpha * epsilon
     s_new = s.copy()
-    s_new[cur_season_index] = s[cur_season_index] + gamma*(epsilon + t)
+    s_new[cur_season_index] = s[cur_season_index] + gamma*epsilon
     
     return (l_new, t_new, *s_new)
 

@@ -59,8 +59,10 @@ class HW_model:
             fitted[t] = l + d + s[t % self.m]
 
             prel = l
-            l = self.alpha * (y[t] - s[t % self.m]) + (1 - self.alpha) * (prel + d)
-            d = self.beta * (l - prel) + (1 - self.beta) * d
+            prel = l
+            pred = d
+            l = self.alpha * (y[t] - s[t % self.m]) + (1 - self.alpha) * (prel + pred)
+            d = self.beta * (l - prel) + (1 - self.beta) * pred
             s[t % self.m] = self.gamma * (y[t] - l) + (1 - self.gamma) * s[t % self.m]
 
         self.fitted = fitted
@@ -98,9 +100,10 @@ class HW_model:
             y = np.array(new_data)
             self.fitted = np.append(self.fitted, l + d + s[season_index])
             prel = l
-            l = self.alpha * (y[t] - s[season_index]) + (1 - self.alpha) * (prel + d)
-            d = self.beta * (l - prel) + (1 - self.beta) * d
-            s[season_index] = self.gamma * (y[t] - prel) + (1 - self.gamma) * s[season_index]
+            pred = d
+            l = self.alpha * (y[t] - s[season_index]) + (1 - self.alpha) * (prel + pred)
+            d = self.beta * (l - prel) + (1 - self.beta) * pred
+            s[season_index] = self.gamma * (y[t] - prel - pred) + (1 - self.gamma) * s[season_index]
             season_index = (season_index + 1) % self.m
 
         self.cur_l = l

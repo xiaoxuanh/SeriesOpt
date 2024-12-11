@@ -1,2 +1,2 @@
 # SeriesOpt
-Sequential optimal control with time series data
+Sequential optimal control with time series state space

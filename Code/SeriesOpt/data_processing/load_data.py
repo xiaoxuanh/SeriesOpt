@@ -45,7 +45,61 @@ def load_actual_data(data_file_name: str) -> pd.DataFrame:
     
     return actual_series
 
+def find_opt_season_group(prices, num_segments):
+    """
+    Find the optimal seasonality group for the given hourly data.
+    num_segments: number of seasons
+    prices: 24 hours of data
 
+    Returns:
+    dp[num_segments][len(prices)]: Minimum total error.
+    segments: List of tuples representing the start and end indices of each segment.
+    """
+    def calculate_error(start, end):
+        """
+        Calculate the squared error for a segment from start to end (inclusive).
+        """
+        segment = prices[start:end+1]
+        mean = np.mean(segment)
+        error = np.sum((segment - mean) ** 2)
+        return error
+    
+    n = len(prices)
+    dp = np.full((num_segments + 1, n + 1), np.inf)  # dp[s][h] -> min error for s segments, h hours
+    split = np.zeros((num_segments + 1, n + 1), dtype=int)  # Tracks split points
+
+    # Base case: 1 segment, error is calculated directly
+    for h in range(1, n + 1):
+        dp[1][h] = calculate_error(0, h - 1)
+
+    # Fill DP table for s segments
+    for s in range(2, num_segments + 1):
+        for h in range(1, n + 1):
+            for k in range(1, h):
+                error = calculate_error(k, h - 1)
+                if dp[s][h] > dp[s-1][k] + error:
+                    dp[s][h] = dp[s-1][k] + error
+                    split[s][h] = k
+
+    # Backtrack to find the segments
+    segments = []
+    current_hour = n
+    for s in range(num_segments, 0, -1):
+        start = split[s][current_hour]
+        segments.append((start, current_hour - 1))
+        current_hour = start
+
+    segments.reverse()
+
+    # Compute average price and length for each segment
+    for i, (start, end) in enumerate(segments):
+        segment = prices[start:end+1]
+        mean = np.mean(segment)
+        segments[i] = (start, end, mean, len(segment))
+
+    return segments
+
+    
 
 if __name__ == "__main__":
 

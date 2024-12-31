@@ -48,20 +48,22 @@ class HW_model:
         # store level, trend, and seasonality
         hist_l = np.zeros(n)
         hist_d = np.zeros(n)
-        hist_s = np.zeros(n)
+        hist_s = np.zeros((n, self.m))
 
         # Iterative training
         for t in range(1, n):
             hist_l[t] = l
             hist_d[t] = d
-            hist_s[t] = s[t % self.m]
+            hist_s[t, :] = s
 
             fitted[t] = l + d + s[t % self.m]
 
             prel = l
-            l = self.alpha * (y[t] - s[t % self.m]) + (1 - self.alpha) * (prel + d)
-            d = self.beta * (l - prel) + (1 - self.beta) * d
-            s[t % self.m] = self.gamma * (y[t] - l) + (1 - self.gamma) * s[t % self.m]
+            prel = l
+            pred = d
+            l = self.alpha * (y[t] - s[t % self.m]) + (1 - self.alpha) * (prel + pred)
+            d = self.beta * (l - prel) + (1 - self.beta) * pred
+            s[t % self.m] = self.gamma * (y[t] - l - pred) + (1 - self.gamma) * s[t % self.m]
 
         self.fitted = fitted
         self.cur_l = l
@@ -98,9 +100,10 @@ class HW_model:
             y = np.array(new_data)
             self.fitted = np.append(self.fitted, l + d + s[season_index])
             prel = l
-            l = self.alpha * (y[t] - s[season_index]) + (1 - self.alpha) * (prel + d)
-            d = self.beta * (l - prel) + (1 - self.beta) * d
-            s[season_index] = self.gamma * (y[t] - prel) + (1 - self.gamma) * s[season_index]
+            pred = d
+            l = self.alpha * (y[t] - s[season_index]) + (1 - self.alpha) * (prel + pred)
+            d = self.beta * (l - prel) + (1 - self.beta) * pred
+            s[season_index] = self.gamma * (y[t] - prel - pred) + (1 - self.gamma) * s[season_index]
             season_index = (season_index + 1) % self.m
 
         self.cur_l = l
@@ -149,9 +152,42 @@ class HW_model:
 
         return synthetic_series
 
+    def dp_func_transition(self, state, cur_season_index, epsilon): # TODO: consider merge with the update function
+        """
+        Transition function for the DP model.
+        Holt-Winters price transition function
+        :param state: Current states
+        :param epsilon: Random noise
+        :param period_index: Current period index; 0 to N-1
+        :return: Next states
+        """
+        l, t, *s = state
+        s = np.array(s, dtype=float)
+        t_new = t + alpha * beta * epsilon
+        l_new = l + t + alpha * epsilon
+        s_new = s.copy()
+        s_new[cur_season_index] = s[cur_season_index] + gamma*epsilon
+        
+        return (l_new, t_new, *s_new)
+
+    
 
 if __name__ == "__main__":
-    x0 = [30, 0, -30, 10, -40, -20]
-    ts_instance = HW_model(4, x0[0],x0[1],x0[2:],0) # reset the state
-    series = ts_instance.generate_series(8, 10)
-    print(series)
+    import os
+    wd = os.getcwd()
+    # x0 = [30, 0, -30, 10, -40, -20]
+    # ts_instance = HW_model(4, x0[0],x0[1],x0[2:],0) # reset the state
+    # series = ts_instance.generate_series(8, 10)
+    # print(series)
+    price_pjm = pd.read_csv(os.path.dirname(wd)+'\\data\\PJM.csv')
+
+    # keep the price column only
+    price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
+    price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
+
+    # split into train and test
+    price_train = price_pjm[price_pjm.index.year!=2018]
+    price_test = price_pjm[price_pjm.index.year==2018]
+
+    hw_model = HW_model(24)
+    hw_model.fit(price_train)

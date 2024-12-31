@@ -15,6 +15,10 @@ class Config:
         'gamma': 0.3,
         'm': 4,
         'sigma': 10,
+        # parameters for ARIMA model
+        'p': 1,
+        'd': 1,
+        'q': 1,
         # parameters for periodic optimization
         'reopt_freq': 4, # re-optimization frequency, no larger than opt_horizon
         'opt_horizon': 8, # optimization horizon

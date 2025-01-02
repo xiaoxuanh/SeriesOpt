@@ -1,13 +1,11 @@
 import numpy as np
 import pandas as pd
 from ..config import Config
-
-alpha = Config.get_param('alpha')
-beta = Config.get_param('beta')
-gamma = Config.get_param('gamma')
+from . import tune_params
+from . import load_data
 
 class HW_model:
-    def __init__(self, m, l0=None, d0=None, s0=None, season_index0=None):
+    def __init__(self, m, l0=None, d0=None, s0=None, season_index0=None, hyperparams=None):
         """
         train: training data, time series
         m: season length
@@ -15,6 +13,7 @@ class HW_model:
         l0, d0, s0: current level, trend, and seasonality values
         season_index0: current season index, pointing to index of the upcoming unknown value
         l0 + d0 + s0[season_index0] is the forecast for the next period
+        hyperparams: dictionary of hyperparameters, alpha, beta, gamma
         """
         self.model_name = 'HW'
         self.m = m
@@ -22,13 +21,27 @@ class HW_model:
         self.cur_l = l0
         self.cur_d = d0
         self.cur_s = s0
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
+
+        if hyperparams==None:
+            self.alpha = Config.get_param('alpha')
+            self.beta = Config.get_param('beta')
+            self.gamma = Config.get_param('gamma')
+        else:
+            self.alpha = hyperparams['alpha']
+            self.beta = hyperparams['beta']
+            self.gamma = hyperparams['gamma']
 
         self.cur_season_index = 0 if season_index0==None else season_index0
 
-    def fit(self, train):
+    def reset_hyperparams(self, hyperparams):
+        """
+        Reset the hyperparameters
+        """
+        self.alpha = hyperparams['alpha']
+        self.beta = hyperparams['beta']
+        self.gamma = hyperparams['gamma']
+
+    def fit(self, train, hyperparams=None):
         """
         train: training data, time series
         h: forecast horizon
@@ -39,6 +52,12 @@ class HW_model:
         n = len(self.train)
         fitted = np.zeros(n)
         y = np.array(self.train)
+
+        # Update parameters if specified
+        if hyperparams!=None:
+            self.alpha = hyperparams['alpha']
+            self.beta = hyperparams['beta']
+            self.gamma = hyperparams['gamma']
 
         # Initialize level, trend, and seasonality
         l = y[0] # level
@@ -163,10 +182,10 @@ class HW_model:
         """
         l, t, *s = state
         s = np.array(s, dtype=float)
-        t_new = t + alpha * beta * epsilon
-        l_new = l + t + alpha * epsilon
+        t_new = t + self.alpha * self.beta * epsilon
+        l_new = l + t + self.alpha * epsilon
         s_new = s.copy()
-        s_new[cur_season_index] = s[cur_season_index] + gamma*epsilon
+        s_new[cur_season_index] = s[cur_season_index] + self.gamma*epsilon
         
         return (l_new, t_new, *s_new)
 
@@ -189,5 +208,23 @@ if __name__ == "__main__":
     price_train = price_pjm[price_pjm.index.year!=2018]
     price_test = price_pjm[price_pjm.index.year==2018]
 
-    hw_model = HW_model(24)
-    hw_model.fit(price_train)
+    # make prices more coarse-grained from 24 hours to 4 segments in each day
+    price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
+    price_train = load_data.find_opt_season_group(price_train, 4)
+
+    # Initialize the Holt-Winters model
+    ts_instance = HW_model(4)
+    # Define the hyperparameter space
+    param_grid = {
+    'alpha': np.linspace(0.01, 0.05, 5),
+    'beta': np.linspace(0.01, 0.05, 5),
+    'gamma': np.linspace(0.3, 1, 9)
+}
+    # Perform Bayesian optimization to tune hyperparameters
+    tune_params.grid_search_tune_params(ts_instance, price_train, param_grid)
+    # Fit the model
+    ts_instance.fit(price_train)
+    # print the fitted parameters
+    print(ts_instance.alpha, ts_instance.beta, ts_instance.gamma)
+    # print final rMAE
+    print(tune_params.disjoint_time_series_cross_val(ts_instance, price_train, {'alpha': ts_instance.alpha, 'beta': ts_instance.beta, 'gamma': ts_instance.gamma}))

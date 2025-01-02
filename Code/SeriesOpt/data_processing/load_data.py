@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from .holt_winters import HW_model
 from ..utils import get_data_path
 
 def load_synthetic_data(time_series_class, **kwargs) -> pd.DataFrame:
@@ -104,7 +103,7 @@ def find_opt_season_group(prices, num_segments):
         # add segment length to segments
         segments[segments.index((start, end))] = (start, end, end-start+1)
 
-    output_prices = np.array(output_prices).transpose(1, 0).tolist()
+    output_prices = np.array(output_prices).transpose(1, 0).ravel()
         
     return output_prices
 

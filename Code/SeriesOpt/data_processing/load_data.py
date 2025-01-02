@@ -49,7 +49,7 @@ def find_opt_season_group(prices, num_segments):
     """
     Find the optimal seasonality group for the given hourly data.
     num_segments: number of seasons
-    prices: 24 hours of data
+    prices: list of arrays, with each array representing the prices for each hour of one day.
 
     Returns:
     dp[num_segments][len(prices)]: Minimum total error.
@@ -57,14 +57,17 @@ def find_opt_season_group(prices, num_segments):
     """
     def calculate_error(start, end):
         """
-        Calculate the squared error for a segment from start to end (inclusive).
+        Calculate the squared error for a segment across all days.
         """
-        segment = prices[start:end+1]
-        mean = np.mean(segment)
-        error = np.sum((segment - mean) ** 2)
-        return error
+        prices_array = np.array(prices)
+        segment = prices_array[:, start:end+1]
+        means = np.mean(segment, axis=1, keepdims=True)  # Compute means for each day
+        errors = np.sum((segment - means) ** 2, axis=1)  # Compute squared errors for each day
+        total_error = np.sum(errors)  # Sum errors across all days
+        
+        return total_error
     
-    n = len(prices)
+    n = len(prices[0])
     dp = np.full((num_segments + 1, n + 1), np.inf)  # dp[s][h] -> min error for s segments, h hours
     split = np.zeros((num_segments + 1, n + 1), dtype=int)  # Tracks split points
 
@@ -91,13 +94,19 @@ def find_opt_season_group(prices, num_segments):
 
     segments.reverse()
 
-    # Compute average price and length for each segment
-    for i, (start, end) in enumerate(segments):
-        segment = prices[start:end+1]
-        mean = np.mean(segment)
-        segments[i] = (start, end, mean, len(segment))
+    # Compute average price and length for each segment and construct the average price series
+    prices_array = np.array(prices)
+    output_prices = []
+    for start, end in segments:
+        segment_prices = prices_array[:, start:end+1]
+        mean_prices = np.mean(segment_prices, axis=1)  # Compute mean for each day for the segment
+        output_prices.append(mean_prices)
+        # add segment length to segments
+        segments[segments.index((start, end))] = (start, end, end-start+1)
 
-    return segments
+    output_prices = np.array(output_prices).transpose(1, 0).tolist()
+        
+    return output_prices
 
     
 
@@ -105,25 +114,40 @@ if __name__ == "__main__":
 
     ### Test the synthetic data generation function ###
     # Example usage
-    n_periods = 1000
-    initial_level = 50
-    trend = 0
-    seasonality = [10, -5, 0, 5]  # Example of 4-period seasonality
-    sigma = 0  # Noise standard deviation
+    # n_periods = 1000
+    # initial_level = 50
+    # trend = 0
+    # seasonality = [10, -5, 0, 5]  # Example of 4-period seasonality
+    # sigma = 0  # Noise standard deviation
 
-    randomness = False
+    # randomness = False
 
-    # Generate the synthetic series using load_synthetic_data
-    synthetic_series = load_synthetic_data(HW_model, n_periods=n_periods, m=len(seasonality), l0=initial_level,
-                                           d0=trend, s0=seasonality, sigma=sigma,
-                                           random_level=randomness, random_trend=randomness, random_seasonality=randomness)
-    save_synthetic_data(synthetic_series, 'synthetic_data_sigma0.csv')
+    # # Generate the synthetic series using load_synthetic_data
+    # synthetic_series = load_synthetic_data(HW_model, n_periods=n_periods, m=len(seasonality), l0=initial_level,
+    #                                        d0=trend, s0=seasonality, sigma=sigma,
+    #                                        random_level=randomness, random_trend=randomness, random_seasonality=randomness)
+    # save_synthetic_data(synthetic_series, 'synthetic_data_sigma0.csv')
 
-    # Plot the series values
-    import matplotlib.pyplot as plt
-    plt.plot(synthetic_series['value'], label="Synthetic Series")
-    plt.title("Synthetic Series with Randomized Components (Level, Trend, Seasonality)")
-    plt.xlabel("Time")
-    plt.ylabel("Value")
-    plt.legend()
-    plt.show()
+    # # Plot the series values
+    # import matplotlib.pyplot as plt
+    # plt.plot(synthetic_series['value'], label="Synthetic Series")
+    # plt.title("Synthetic Series with Randomized Components (Level, Trend, Seasonality)")
+    # plt.xlabel("Time")
+    # plt.ylabel("Value")
+    # plt.legend()
+    # plt.show()
+    import os
+    wd = os.getcwd()
+    price_pjm = pd.read_csv(os.path.dirname(wd)+'\\data\\PJM.csv')
+
+    # keep the price column only
+    price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
+    price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
+
+    # split into train and test
+    price_train = price_pjm[price_pjm.index.year!=2018]
+    price_test = price_pjm[price_pjm.index.year==2018]
+
+    price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
+
+    shrunk_prices = find_opt_season_group(price_train, 4)

@@ -6,6 +6,8 @@ from itertools import product
 from collections import defaultdict
 from SeriesOpt.config import Config
 from SeriesOpt.data_processing.randomness_models import *
+from SeriesOpt.data_processing.holt_winters import HW_model
+from SeriesOpt.data_processing import load_data
 from multiprocessing import Pool
 
 Me = Config.get_param('Me')
@@ -236,7 +238,7 @@ def _compute_wi_yi(k, cur_season_index, xk, memo, randomness_model) -> tuple:
             
         return w_i, y_i
 
-def _generate_memo_discrete(x0, season_index0, randomness_model) -> dict:
+def _generate_memo_discrete(x0, season_index0, randomness_model, ts_model) -> dict: #TODO: move ts_model related to ts model class and use it in the dp_optimizer
     """
     Generate a memoization dictionary containing the exact possible states for each time step,
     given the initial state and a discrete randomness model.
@@ -287,74 +289,51 @@ def _generate_memo_discrete(x0, season_index0, randomness_model) -> dict:
         print(k, len(memo[k]))
     return memo
 
-def __generate_memo_normal(x0, season_index0, randomness_model) -> dict:
+def __generate_memo_normal(x0, season_index0, randomness_model, ts_model) -> dict: #TODO: get rid of season_index0 in all dp implementations later
     """
     Generate a dictionary to store the f and g function values for each xk state in each period
     Tailored for normal randomness models
 
+    Assume DP optimization starts from season 0
+
     :param x0: initial ts states
     """
     memo = defaultdict(dict)
-    l0, t0, s0 = x0[0], x0[1], x0[2:]
 
+    # Calculate the min and max values for each state based on the randomness model and ts model
+    state_ranges = ts_model.dp_generate_state_range(x0, randomness_model, opt_horizon)
     for k in range(opt_horizon):
-        l_variance_term = np.sqrt(beta**2 * (k*(k-1)*(2*k-1)/6) + beta * k*(k-1) + k) * alpha * randomness_model.sigma
-        lmin = l0 + k * t0 - 2 * l_variance_term
-        lmax = l0 + k * t0 + 2 * l_variance_term
-        num_l_states = min(max_num_x_states, int((lmax - lmin) / max_x_step_size) + 1)
-        if num_l_states > 1: 
-            l_values = np.linspace(lmin, lmax, num_l_states)
-        else: # if there is only one state, use the mean value
-            l_values = [l0 + k * t0]
-        l_values = np.round(l_values).astype(int)
+        period_memo = []
+        for min_max_tuple in state_ranges[k]: # for each state, e.g., level, trend, season
+            min_state, max_state = min_max_tuple
+            num_states = min(max_num_x_states, int((max_state - min_state) / max_x_step_size) + 1)
+            if num_states > 1:
+                state_values = np.linspace(min_state, max_state, num_states)
+            else: # if there is only one state, use the mean value
+                state_values = [np.mean([min_state, max_state])]
+            state_values = np.round(state_values).astype(int)
 
-        t_variance_term = np.sqrt(k) * alpha * beta * randomness_model.sigma
-        tmin = t0 - 2 * t_variance_term
-        tmax = t0 + 2 * t_variance_term
-        num_t_states = min(max_num_x_states, int((tmax - tmin) / max_x_step_size) + 1)
-        if num_t_states > 1:
-            t_values = np.linspace(tmin, tmax, num_t_states)
-        else:
-            t_values = [t0]
-        t_values = np.round(t_values).astype(int)
-
-        s_values = []
-        cur_season_index = (season_index0 + k) % m
-        relevant_seasons = [(cur_season_index + j) % m for j in range(opt_horizon - k)] # for the last few periods, some seasons are irrelevant for the optimal control
-        for i in range(0, m):
-            delta_i = (i - season_index0 + m) % m
-            r = np.floor((k - 1 - delta_i) / m) + 1 # number of updates of season index i as of period k
-            if i in relevant_seasons:
-                variance_term_s = np.sqrt(r + alpha**2 * beta**2 * (r * delta_i + (m / 2) * r * (r - 1))) * randomness_model.sigma
-                smin = s0[i] + t0 * r - 2 * variance_term_s
-                smax = s0[i] + t0 * r + 2 * variance_term_s
-                num_s_states = min(max_num_x_states, int((smax - smin) / max_x_step_size) + 1)
-            else:
-                num_s_states = 1
-                smin = smax = s0[i] + t0 * r
-            
-            s_values.append(np.linspace(smin, smax, num_s_states))
-            
-        s_values = [np.round(s).astype(int) for s in s_values]
-
+            period_memo.append(state_values)
+        
         # Create all combinations of the datapoints for each k
-        for values in product(l_values, t_values, *s_values):
+        for values in product(*period_memo):
             memo[k][(values)] = []
         # have a value counting number of intervals for each k
         memo[k]['num_intervals'] = None
     
     return memo
 
-def _generate_memo(x0, season_index0, randomness_model) -> dict:
+
+def _generate_memo(x0, season_index0, randomness_model, ts_model) -> dict:
     """
     Generate a dictionary to store the f and g function values for each xk state in each period
 
     :param x0: initial ts states
     """
     if isinstance(randomness_model, NormalRandomness):
-        return __generate_memo_normal(x0, season_index0, randomness_model)
+        return __generate_memo_normal(x0, season_index0, randomness_model, ts_model)
     elif isinstance(randomness_model, DiscreteRandomness):
-        return _generate_memo_discrete(x0, season_index0, randomness_model)
+        return _generate_memo_discrete(x0, season_index0, randomness_model, ts_model)
     else:
         raise ValueError("Randomness model not supported")
 
@@ -378,7 +357,7 @@ def _solve_xk(args):
     return temp_results
 
 
-def dp_optimize(x0, season_index0, randomness_model) -> dict:
+def dp_optimize(x0, season_index0, randomness_model, ts_model) -> dict:
     """
     Dynamic programming optimization
 
@@ -386,13 +365,14 @@ def dp_optimize(x0, season_index0, randomness_model) -> dict:
     x0: initial states, tuple of (l0, t0, s0)
     season_index0: initial season index
     opt_horizon: optimization horizon
+    ts_model: time series model
 
     returns:
     memo: indexed by (k, xk), stores the f and g function values for the input states [(f1, g1), (f2, g2), ...]
     policy: indexed by (k, xk, b), stores the optimal control action for the input states
     """
     # Initialize the memo dictionary
-    memo = _generate_memo(x0, season_index0, randomness_model)
+    memo = _generate_memo(x0, season_index0, randomness_model, ts_model)
 
     # Initialize the policy dictionary
     policy = {}
@@ -451,19 +431,45 @@ if __name__ == '__main__':
 
     Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
                    'opt_horizon': 6})
-    randomness_model = DiscreteRandomness(np.arange(-15, 15), [1/30]*30)
-    b0 = 0
+    
+    ############ Discrete randomness; randomly generated prices ################
+    # randomness_model = DiscreteRandomness(np.arange(-15, 15), [1/30]*30)
+    # level = np.random.randint(-10, 30)
+    # trend = np.random.randint(-2,3)
+    # season = [int(x) for x in np.random.randint(-5, 30, 6)]
+    # x0 = [level, trend, *season]
+    # ts_instance = HW_model(6, level, trend, season,0)
+    
+    ############ Normal randomness; real prices ################
+    randomness_model = NormalRandomness(Config.get_param('sigma'))
+    season = 4
+    wd = os.getcwd()
+    price_pjm = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM.csv')
+    # keep the price column only
+    price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
+    price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
+    # split into train and test
+    price_train = price_pjm[price_pjm.index.year!=2018]
+    price_test = price_pjm[price_pjm.index.year==2018]
 
-    level = np.random.randint(-10, 30)
-    trend = np.random.randint(-2,3)
-    season = [int(x) for x in np.random.randint(-5, 30, 6)]
-    x0 = [level, trend, *season]
-    ts_instance = HW_model(6, level, trend, season,0)
+    price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
+    price_test = [price_test.iloc[i*24:(i+1)*24] for i in range(len(price_test)//24)]
+    # find the optimal segmentation for each 24-hour period based on the training data
+    segments = load_data.find_opt_season_group(price_train, season)
+    # aggregate the training and testing data into segments
+    price_train = load_data.aggregate_prices(price_train, segments)
+    price_test = load_data.aggregate_prices(price_test, segments)
+    
+    hw_model = HW_model(season)
+    hw_model.fit(price_train, hyperparams={'alpha': 0.01, 'beta': 0.055, 'gamma': 1.0})
+    x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
+
+    b0 = 0
 
     # Run the DP optimizer to solve for optimal policy
     start = time.time()
     # Initialize the memo dictionary
-    memo, policy = dp_optimize(x0,0,randomness_model)
+    memo, policy = dp_optimize(x0,0,randomness_model, hw_model)
     end = time.time()
     print(f"DP optimizer took {end-start} seconds to run")
     # randomly generate a x0 and solve for the optimal policy; do this for 50 times

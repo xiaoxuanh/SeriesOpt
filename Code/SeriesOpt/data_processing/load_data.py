@@ -92,16 +92,24 @@ def find_opt_season_group(prices, num_segments):
         current_hour = start
 
     segments.reverse()
+    # add segment length to segments
+    for i in range(len(segments)):
+        start, end = segments[i]
+        segments[i] = (start, end, end-start+1)
 
+    return segments
+
+def aggregate_prices(prices, segments):
+    """
+    Aggregate prices for each segment and compute the average price series.
+    """
     # Compute average price and length for each segment and construct the average price series
     prices_array = np.array(prices)
     output_prices = []
-    for start, end in segments:
+    for start, end, length in segments:
         segment_prices = prices_array[:, start:end+1]
         mean_prices = np.mean(segment_prices, axis=1)  # Compute mean for each day for the segment
         output_prices.append(mean_prices)
-        # add segment length to segments
-        segments[segments.index((start, end))] = (start, end, end-start+1)
 
     output_prices = np.array(output_prices).transpose(1, 0).ravel()
         

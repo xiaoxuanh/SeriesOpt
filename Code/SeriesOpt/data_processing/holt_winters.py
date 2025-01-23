@@ -3,6 +3,7 @@ import pandas as pd
 from ..config import Config
 from . import tune_params
 from . import load_data
+from collections import defaultdict
 
 class HW_model:
     def __init__(self, m, l0=None, d0=None, s0=None, season_index0=None, hyperparams=None):
@@ -188,7 +189,52 @@ class HW_model:
         s_new[cur_season_index] = s[cur_season_index] + self.gamma*epsilon
         
         return (l_new, t_new, *s_new)
+    
+    def dp_generate_state_range(self, init_state, randomness_model, opt_horizon):
+        """
+        Generate the memo table for the DP model.
+        :param init_state: Initial state
+        :param randomness_model: Randomness model
+        :param opt_horizon: Number of periods to optimize
+        :return: Memo table
+        """
+        state_range = [list() for _ in range(opt_horizon)]
+        l0, t0, *s0 = init_state
 
+        for k in range(opt_horizon):
+            period_range = []
+            l_variance_term = np.sqrt(self.beta**2 * (k*(k-1)*(2*k-1)/6) 
+                                  + self.beta * k*(k-1) + k) * self.alpha * randomness_model.sigma
+            lmin = l0 + k * t0 - 1.96 * l_variance_term
+            lmax = l0 + k * t0 + 1.96 * l_variance_term
+            period_range.append((lmin, lmax))
+
+            t_variance_term = np.sqrt(k) * self.alpha * self.beta * randomness_model.sigma
+            tmin = t0 - 1.96 * t_variance_term
+            tmax = t0 + 1.96 * t_variance_term
+            period_range.append((tmin, tmax))
+
+            # specify relevant seasons. Towards the end of the optimization horizon, some seasons no longer matter.
+            cur_season_index = k % self.m # assumes the season index starts from 0
+            relevant_seasons = [(cur_season_index + j) % self.m for j in range(opt_horizon - k)]
+            for i in range(self.m):
+                if i in relevant_seasons:
+                    if i <= k % self.m:
+                        multiplier = max(0, np.floor((k-1)/self.m))+1
+                    else:
+                        multiplier = max(0, np.floor(k/self.m))
+                    s_variance_term = np.sqrt(multiplier) * self.gamma * randomness_model.sigma
+                    smin = s0[i] - 1.96 * s_variance_term
+                    smax = s0[i] + 1.96 * s_variance_term
+                else: # use mean if the season is not relevant
+                    smin = s0[i]
+                    smax = s0[i]
+                
+                period_range.append((smin, smax))
+        
+            state_range[k] = period_range
+        
+        return state_range
     
 
 if __name__ == "__main__":

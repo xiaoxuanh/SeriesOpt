@@ -27,8 +27,8 @@ class NormalRandomness(RandomnessModel):
     def pdf(self, z):
         return self.distribution.pdf(z)
 
-    def sample(self):
-        return self.distribution.rvs()
+    def sample(self, nsamples=1):
+        return self.distribution.rvs(size=nsamples)
     
     def get_meta_data(self):
         return {'type': 'NormalRandomness', 'sigma': self.sigma}
@@ -42,8 +42,8 @@ class UniformRandomness(RandomnessModel):
     def pdf(self, z):
         return self.distribution.pdf(z)
 
-    def sample(self):
-        return self.distribution.rvs()
+    def sample(self, nsamples=1):
+        return self.distribution.rvs(size=nsamples)
     
     def get_meta_data(self):
         return {'type': 'UniformRandomness', 'a': self.a, 'b': self.b}
@@ -61,10 +61,10 @@ class DiscreteRandomness(RandomnessModel):
         else:
             return 0
 
-    def sample(self):
-        random_number = np.random.rand()
-        index = np.searchsorted(self.cumulative_probabilities, random_number)
-        return self.values[index]
+    def sample(self, nsamples=1):
+        random_numbers = np.random.rand(nsamples)
+        indices = np.searchsorted(self.cumulative_probabilities, random_numbers)
+        return [self.values[i] for i in indices]
     
     def get_meta_data(self):
         return {'type': 'DiscreteRandomness', 'values': self.values, 'probabilities': self.probabilities}

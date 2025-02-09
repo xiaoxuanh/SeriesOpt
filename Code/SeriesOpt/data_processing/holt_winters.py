@@ -89,20 +89,26 @@ class HW_model:
         self.cur_l = l
         self.cur_d = d
         self.cur_s = s
-        self.cur_season_index = t % self.m
+        self.cur_season_index = (t+1) % self.m 
+        # move season index to the next unknown value; so that l+d+s[season_index] is the forecast for the next period
 
         self.hist_l = hist_l
         self.hist_d = hist_d
         self.hist_s = hist_s
 
-    def forecast(self, h):
+    def forecast(self, h, state=None, starting_index=None):
         """
         h: forecast horizon
         """
         # Forecast for the next h steps
         forecast = np.zeros(h)
-        for j in range(h):
-            forecast[j] = self.cur_l + j * self.cur_d + self.cur_s[(self.cur_season_index + j) % self.m]
+        if state!=None and starting_index!=None:
+            l, d, *s = state
+            for j in range(h):
+                forecast[j] = l + d + s[(starting_index + j) % self.m]
+        else:
+            for j in range(h):
+                forecast[j] = self.cur_l + j * self.cur_d + self.cur_s[(self.cur_season_index + j) % self.m]
 
         return forecast
     
@@ -172,7 +178,7 @@ class HW_model:
 
         return synthetic_series
 
-    def dp_func_transition(self, state, cur_season_index, epsilon): # TODO: consider merge with the update function
+    def dp_func_transition(self, state, epsilon, cur_season_index):
         """
         Transition function for the DP model.
         Holt-Winters price transition function
@@ -219,8 +225,8 @@ class HW_model:
             relevant_seasons = [(cur_season_index + j) % self.m for j in range(opt_horizon - k)]
             for i in range(self.m):
                 if i in relevant_seasons:
-                    if i <= k % self.m:
-                        multiplier = max(0, np.floor((k-1)/self.m))+1
+                    if i < k % self.m:
+                        multiplier = max(0, np.floor((k-1)/self.m)+1)
                     else:
                         multiplier = max(0, np.floor(k/self.m))
                     s_variance_term = np.sqrt(multiplier) * self.gamma * randomness_model.sigma

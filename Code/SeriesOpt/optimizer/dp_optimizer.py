@@ -22,7 +22,7 @@ m = Config.get_param('m')
 max_num_b_states = Config.get_param('max_num_b_states')
 max_b_step_size = Config.get_param('max_b_step_size')
 max_num_x_states = Config.get_param('max_num_x_steps')
-max_x_step_size = Config.get_param('max_x_step_size')
+min_x_step_size = Config.get_param('min_x_step_size')
 opt_horizon = Config.get_param('opt_horizon')
 
 def _single_step_opt(b, w_i, y_i, p) -> tuple:
@@ -306,7 +306,7 @@ def __generate_memo_normal(x0, season_index0, randomness_model, ts_model) -> dic
         period_memo = []
         for min_max_tuple in state_ranges[k]: # for each state, e.g., level, trend, season
             min_state, max_state = min_max_tuple
-            num_states = min(max_num_x_states, int((max_state - min_state) / max_x_step_size) + 1)
+            num_states = min(max_num_x_states, int((max_state - min_state) / min_x_step_size) + 1)
             if num_states > 1:
                 state_values = np.linspace(min_state, max_state, num_states)
             else: # if there is only one state, use the mean value

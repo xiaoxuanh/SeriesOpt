@@ -117,6 +117,7 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
     
     control_results = pd.DataFrame(control_results, columns=['name', 'index', 'value'])
     
+    # return control results and optimal objective value
     return control_results
 
 if __name__ == "__main__":

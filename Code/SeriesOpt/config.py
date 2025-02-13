@@ -5,7 +5,7 @@ class Config:
         'Mc': 1,
         'Md': 1,
         # storage energy capacity and initial level (in MWh)
-        'Me': 2,
+        'Me': 4,
         'b0': 0,
         # efficiency
         'eta': 0.9,
@@ -13,7 +13,7 @@ class Config:
         'alpha': 0.01,
         'beta': 0.003,
         'gamma': 0.3,
-        'm': 4,
+        'm': 24,
         'sigma': 10,
         # parameters for ARIMA model
         'p': 1,
@@ -25,7 +25,7 @@ class Config:
         # parameters for DP optimizer
         'max_num_b_states': 4, # number of b states for discretization
         'max_b_step_size': 1, # maximum step size for b states; the smaller the steps the more number of states
-        'max_num_x_steps': 4, # number of x states for discretization; will explode by the order of m+2 for level, trend, seasonality
+        'max_num_x_steps': 8, # number of x states for discretization; will explode by the order of m+2 for level, trend, seasonality
         'min_x_step_size': 1, # minimum step size for x states; the smaller the steps the more number of states
     }
 

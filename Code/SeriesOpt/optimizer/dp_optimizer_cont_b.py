@@ -243,14 +243,14 @@ def _solve_subproblem(Jkplus1Seg, p, mode):
                 # F(b,u) = immediate_val*(Me-b) + w*(b+Me-b) + y
                 # derivative of F(b,u) wrt b = - immediate_val
                 slope_b = -im_val
-                intercept = w*bnext_R + y - im_val*bnext_R
+                intercept = w*bnext_R + y + im_val*bnext_R
                 # policy_label = "u=bnext_R-b"
                 slope_u_star = -1 # slope and intercept of u* wrt b
                 intercept_u_star = bnext_R
                 pieces.append((bL, bR, slope_b, intercept, slope_u_star, intercept_u_star))
             # CASE 2: bnext_R-b >= Mc => upper = Mc => b <= bnext_R-Mc
             bL = max(0, bnext_L - Mc)   # for b+Mc>=bnext_L
-            bR = min(Me, bnext_R - Mc, bnext_R - Mc)  # for b+Mc<=bnext_R and b<=bnext_R-Mc
+            bR = min(Me, bnext_R - Mc)  # for b+Mc<=bnext_R and b<=bnext_R-Mc
             if bR >= bL:
                 # F(b,u) = immediate_val*Mc + w*(b+Mc) + y
                 # derivative of F(b,u) wrt b = w
@@ -478,6 +478,8 @@ def dp_optimize_cont_b(x0, ts_model, randomness_model, num_samples):
     Returns:
     - policy_sequence: list of optimal controls (u*) from k=0 to k=opt_horizon-1
     """
+    print(f"max_num_x_states is {max_num_x_states}")
+    print(f"Me is {Me}")
     # 1. initialization
     memo, policy = _generate_memo(x0, ts_model, randomness_model, opt_horizon)
     # 2. backward induction
@@ -582,12 +584,13 @@ if __name__ == "__main__":
     from SeriesOpt.data_processing.holt_winters import HW_model
     from SeriesOpt.data_processing.randomness_models import DiscreteRandomness
 
-    Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
+    Config.set_params({'Me': 4, 'Mc':1, 'Md':1, 'eta':0.9,
                    'opt_horizon': 8})
     
     ############ Normal randomness; real prices ################
     randomness_model = NormalRandomness(Config.get_param('sigma'))
     season = 4
+    Me = 4
     wd = os.getcwd()
 
     ############ PJM data ################
@@ -611,17 +614,19 @@ if __name__ == "__main__":
     # pd.DataFrame(price_train).to_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', index=False, header=False)
     # pd.DataFrame(price_test).to_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', index=False, header=False)
 
-    # # load aggregated prices
-    # price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
-    # price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
-    # # convert to numpy array
-    # price_train = price_train.values.flatten()
-    # price_test = price_test.values.flatten()
+    # load aggregated prices
+    price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
+    price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
+    # convert to numpy array
+    price_train = price_train.values.flatten()
+    price_test = price_test.values.flatten()
 
     # ############### fit the HW model ################
-    # hw_model = HW_model(season)
-    # hw_model.fit(price_train, hyperparams={'alpha': 0.01, 'beta': 0.055, 'gamma': 1.0})
-    # x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
+    hw_model = HW_model(season)
+    hw_model.fit(price_train, hyperparams={'alpha': 0.1, 'beta': 0.1, 'gamma': 0.275})
+    past_real_prices = price_test[: 8 * opt_horizon] # test a horizon where DP didn't perform well
+    hw_model.update(past_real_prices)
+    x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
 
     ############### Generate memoization table ###############
     # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
@@ -631,18 +636,19 @@ if __name__ == "__main__":
 
     ################# DP optimization #################
     # turn on when needed
-    # start = time.time()
-    # policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100)
-    # end = time.time()
-    # print("DP optimization time:", end-start)
-    # save_policy(policy, "SeriesOpt/tests/dp_cont_policy.pkl")
+    start = time.time()
+    policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100)
+    end = time.time()
+    print("DP optimization time:", end-start)
+    save_policy(policy, "SeriesOpt/tests/dp_cont_policy.pkl")
+    save_policy(memo, "SeriesOpt/tests/dp_cont_memo.pkl")
     # print("DP policy:", policy)
 
     ################# Apply DP policy #################
-    with open("SeriesOpt/tests/dp_cont_policy.pkl", 'rb') as f:
-        policy = pickle.load(f)
+    # with open("SeriesOpt/tests/dp_cont_policy.pkl", 'rb') as f:
+    #     policy = pickle.load(f)
 
-    print(policy[6])
+    # print(policy[5])
 
     # real_prices = price_test[:opt_horizon]
     # profit_sequence, u_sequence, b_sequence = apply_dp(real_prices, hw_model, policy, 0)

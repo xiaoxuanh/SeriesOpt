@@ -2,7 +2,8 @@ import pandas as pd
 from ..config import Config
 from ..utils import get_results_path
 from .lp_optimizer import lp_optimize
-# from .dp_optimizer import dp_optimize
+from .dp_optimizer_cont_b import *
+import pickle
 
 
 def periodic_opt(ts_instance, test_data, optimizer, opt_horizon, reopt_freq, save_results=False, save_file=None):
@@ -29,6 +30,8 @@ def periodic_opt(ts_instance, test_data, optimizer, opt_horizon, reopt_freq, sav
 
     if optimizer == 'lp':
         for i in range(0, len(test_data), reopt_freq):
+            # update the model with the past data
+            ts_instance.update(test_data[i-reopt_freq:i])
             # get the price forecast for the next H steps
             p_forecast = ts_instance.forecast(opt_horizon)
             # run the optimizer
@@ -46,6 +49,25 @@ def periodic_opt(ts_instance, test_data, optimizer, opt_horizon, reopt_freq, sav
                 # calculate the profit
                 profit = max(action * eta, action / eta) * -test_data[i+j]
                 profit_results.append(profit)
+
+    if optimizer == 'dp':
+        for i in range(0, len(test_data), reopt_freq):
+            # update the model with the past data
+            ts_instance.update(test_data[i-reopt_freq:i])
+            real_prices = test_data[i:i+reopt_freq]
+            # count the number of horizon, assuming the policies have been solved; can change this to 
+            # actually solve the policy at each step
+            horizon = i//reopt_freq
+            with open(get_results_path(f'dp_cont_policies_horizon_{horizon}.pkl'), 'rb') as f:
+                dp_policy = pickle.load(f)
+            # apply the DP policy to the test data
+            dp_profit_horizon, dp_controls_horizon, dp_storage_horizon = apply_dp(real_prices, ts_instance, dp_policy, b)
+            # update the storage
+            b = dp_storage_horizon[-1]
+            # append the results
+            control_results.extend(dp_controls_horizon)
+            profit_results.extend(dp_profit_horizon)
+            b_results.extend(dp_storage_horizon)
 
     # combine results into a dataframe, with test price data and index
     all_results = pd.DataFrame({'price': test_data, 'control': control_results, 

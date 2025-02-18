@@ -14,7 +14,7 @@ Me = Config.get_param('Me')
 eta = Config.get_param('eta')
 # print(Mc, Md, Me, eta)
 
-def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
+def lp_optimize(b0, p_forecast, H, Mc_set=None, Md_set=None) -> pd.DataFrame:
     """
     A linear optimization model.
     Within each step, given knowledge of current charging state and price forecast,
@@ -26,8 +26,14 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
     model.PERIODS = RangeSet(0,H-1)
     
     ### parameters ###
-    model.Mc = Param(initialize=Mc)
-    model.Md = Param(initialize=Md)
+    if Mc_set is None:
+        Mc_set = [Mc] * H
+    if Md_set is None:
+        Md_set = [Md] * H
+    model.Mc = Param(model.PERIODS, initialize=Mc_set)  # Charging limit per period
+    model.Md = Param(model.PERIODS, initialize=Md_set)  # Discharging limit per period
+    # model.Mc = Param(initialize=Mc)
+    # model.Md = Param(initialize=Md)
     model.Me = Param(initialize=Me)
     model.Eta = Param(initialize=eta)
     M = 1e6
@@ -41,10 +47,10 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
     
     ### inner rule definitions ###    
     def storage_charging_cap(model,period):
-        return model.controls[period] <= model.Mc
+        return model.controls[period] <= model.Mc[period]
     
     def storage_discharging_cap(model,period):
-        return model.controls[period] >= -model.Md
+        return model.controls[period] >= -model.Md[period]
     
     def storage_charging_ene(model,period):
         return model.controls[period] <= model.Me - model.Charging_State[period]
@@ -123,8 +129,10 @@ def lp_optimize(b0, p_forecast, H) -> pd.DataFrame:
 if __name__ == "__main__":
     # Example usage
     b0 = 0
-    p_forecast = np.array([10, 20, 10, -10, 20])
-    H = 5
+    p_forecast = np.array([10, 20, 10, -10, 20, 10, 20, 10, -10, 20, 10, 20])
+    H = 12
+    Mc_set = [2, 1, 1, 2, 2, 2, 2, 1, 1, 1, 2, 2]
+    Md_set = [2, 1, 1, 2, 2, 2, 2, 1, 1, 1, 2, 2]
     
-    control_results = lp_optimize(b0, p_forecast, H)
+    control_results = lp_optimize(b0, p_forecast, H, Mc_set, Md_set)
     print(control_results)

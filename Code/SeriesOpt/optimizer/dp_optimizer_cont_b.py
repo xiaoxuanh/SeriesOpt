@@ -204,7 +204,7 @@ def _build_expected_pwl(
 # 4. Single step optimization for J_k
 ############################################################
 
-def _solve_subproblem(Jkplus1Seg, p, mode):
+def _solve_subproblem(Jkplus1Seg, p, mode, Mc_k, Md_k):
     """
     A unified function that handles EITHER the 'charging' or 'discharging' 
     sub-problem in a 'max' objective context.
@@ -212,7 +212,7 @@ def _solve_subproblem(Jkplus1Seg, p, mode):
     Within the segment b+u ∈ [bnext_L, bnext_R], J_{k+1}(b+u) = w*(b+u) + y.
     The value function is:
        F(b,u) = immediate_val + w*(b+u) + y, 
-    with  u ∈ [0, Mc] or [-Md, 0], and  b+u ∈ [bnext_L, bnext_R],  b ∈ [0, Me],  b+u ≤ Me.
+    with  u ∈ [0, Mc_k] or [-Md_k, 0], and  b+u ∈ [bnext_L, bnext_R],  b ∈ [0, Me],  b+u ≤ Me.
 
     We'll figure out the slope wrt u => w + immediate_val.
     If slope > 0 => we want u = upper boundary.
@@ -233,11 +233,11 @@ def _solve_subproblem(Jkplus1Seg, p, mode):
     pieces = [] # list of segments in b
 
     if mode == 'charge':
-        # Charging: slope_u >= 0, choose feasible upper bound: the min of (u=Mc) or (u=Me-b) or (u=bnext_R-b)
-        # implicitly there should be bnext_R <= Me, so just consider (u=Mc) or (u=bnext_R-b)
+        # Charging: slope_u >= 0, choose feasible upper bound: the min of (u=Mc_k) or (u=Me-b) or (u=bnext_R-b)
+        # implicitly there should be bnext_R <= Me, so just consider (u=Mc_k) or (u=bnext_R-b)
         if slope_u > 0: 
-            # CASE 1: bnext_R-b < Mc => upper = bnext_R-b => b >= bnext_R-Mc
-            bL = max(0, bnext_R - Mc)
+            # CASE 1: bnext_R-b < Mc_k => upper = bnext_R-b => b >= bnext_R-Mc_k
+            bL = max(0, bnext_R - Mc_k)
             bR = bnext_R
             if bR >= bL:
                 # F(b,u) = immediate_val*(Me-b) + w*(b+Me-b) + y
@@ -248,17 +248,17 @@ def _solve_subproblem(Jkplus1Seg, p, mode):
                 slope_u_star = -1 # slope and intercept of u* wrt b
                 intercept_u_star = bnext_R
                 pieces.append((bL, bR, slope_b, intercept, slope_u_star, intercept_u_star))
-            # CASE 2: bnext_R-b >= Mc => upper = Mc => b <= bnext_R-Mc
-            bL = max(0, bnext_L - Mc)   # for b+Mc>=bnext_L
-            bR = min(Me, bnext_R - Mc)  # for b+Mc<=bnext_R and b<=bnext_R-Mc
+            # CASE 2: bnext_R-b >= Mc_k => upper = Mc_k => b <= bnext_R-Mc_k
+            bL = max(0, bnext_L - Mc_k)   # for b+Mc_k>=bnext_L
+            bR = min(Me, bnext_R - Mc_k)  # for b+Mc_k<=bnext_R and b<=bnext_R-Mc_k
             if bR >= bL:
-                # F(b,u) = immediate_val*Mc + w*(b+Mc) + y
+                # F(b,u) = immediate_val*Mc_k + w*(b+Mc_k) + y
                 # derivative of F(b,u) wrt b = w
                 slope_b = w
-                intercept = (im_val+w)*Mc + y
-                # policy_label = "u=Mc"
+                intercept = (im_val+w)*Mc_k + y
+                # policy_label = "u=Mc_k"
                 slope_u_star = 0
-                intercept_u_star = Mc
+                intercept_u_star = Mc_k
                 pieces.append((bL, bR, slope_b, intercept, slope_u_star, intercept_u_star))
         else:
             # Charging: slope_u < 0, choose lower bound (u=0)
@@ -288,12 +288,12 @@ def _solve_subproblem(Jkplus1Seg, p, mode):
                 slope_u_star = 0
                 intercept_u_star = 0
                 pieces.append((bL, bR, slope_b, intercept, slope_u_star, intercept_u_star))
-        # Discharging: slope_u <= 0, choose feasible lower bound: the max of (u=-Md) or (u=-b) or (u=bnext_L-b)
-        # implicitly there should be bnext_L >= 0, so just consider (u=-Md) or (u=bnext_L-b)
+        # Discharging: slope_u <= 0, choose feasible lower bound: the max of (u=-Md_k) or (u=-b) or (u=bnext_L-b)
+        # implicitly there should be bnext_L >= 0, so just consider (u=-Md_k) or (u=bnext_L-b)
         else:
-            # CASE 1: b-bnext_L < Md => lower = bnext_L-b 
+            # CASE 1: b-bnext_L < Md_k => lower = bnext_L-b 
             bL = bnext_L   # for u=bnext_L-b<=0
-            bR = min(Me, bnext_L + Md)
+            bR = min(Me, bnext_L + Md_k)
             if bR >= bL:
                 # F(b,u) = immediate_val*(bnext_L-b) + w*(b+bnext_L-b) + y
                 # derivative of F(b,u) wrt b = - immediate_val
@@ -303,22 +303,22 @@ def _solve_subproblem(Jkplus1Seg, p, mode):
                 slope_u_star = -1
                 intercept_u_star = bnext_L
                 pieces.append((bL, bR, slope_b, intercept, slope_u_star, intercept_u_star))
-            # CASE 2: b-bnext_L >= Md => lower = -Md
-            bL = max(0, bnext_L + Md)   # for b-Md>=bnext_L
-            bR = min(Me, bnext_R + Md)  # for b-Md<=bnext_R
+            # CASE 2: b-bnext_L >= Md_k => lower = -Md_k
+            bL = max(0, bnext_L + Md_k)   # for b-Md_k>=bnext_L
+            bR = min(Me, bnext_R + Md_k)  # for b-Md_k<=bnext_R
             if bR >= bL:
-                # F(b,u) = immediate_val*(-Md) + w*(b-Md) + y
+                # F(b,u) = immediate_val*(-Md_k) + w*(b-Md_k) + y
                 # derivative of F(b,u) wrt b = w
                 slope_b = w
-                intercept = (im_val+w)*(-Md) + y
-                # policy_label = "u=-Md"
+                intercept = (im_val+w)*(-Md_k) + y
+                # policy_label = "u=-Md_k"
                 slope_u_star = 0
-                intercept_u_star = -Md
+                intercept_u_star = -Md_k
                 pieces.append((bL, bR, slope_b, intercept, slope_u_star, intercept_u_star))
             
     return pieces
 
-def _build_Jk_from_Jkplus1(Jkplus1_expected, p):
+def _build_Jk_from_Jkplus1(Jkplus1_expected, p, Mc_k, Md_k):
     """
     For each segment in Jkplus1_expected, solve both the charging and discharging subproblem;
     combine the results to build the upper envelope of J_k.
@@ -340,9 +340,9 @@ def _build_Jk_from_Jkplus1(Jkplus1_expected, p):
     """
     all_candidates = []
     for segment in Jkplus1_expected.segments:
-        charge_pieces = _solve_subproblem(segment, p, mode="charge")
+        charge_pieces = _solve_subproblem(segment, p, mode="charge", Mc_k=Mc_k, Md_k=Md_k)
         all_candidates.extend(charge_pieces)
-        discharge_pieces = _solve_subproblem(segment, p, mode="discharge")
+        discharge_pieces = _solve_subproblem(segment, p, mode="discharge", Mc_k=Mc_k, Md_k=Md_k)
         all_candidates.extend(discharge_pieces)
     
     # Now find the upper envelope of all_candidates
@@ -430,7 +430,7 @@ def _generate_memo(x0, ts_model, randomness_model, opt_horizon):
     return memo, policy
 
 # solve all xk states through parallel processing
-def _process_state(k, state, memo, randomness_model, ts_model, num_samples, ts_args):
+def _process_state(k, state, memo, randomness_model, ts_model, num_samples, ts_args, Mc_k, Md_k):
     """
     helper function that solves the optimization problem for a given state xk
     
@@ -457,11 +457,11 @@ def _process_state(k, state, memo, randomness_model, ts_model, num_samples, ts_a
         )
     # build J_k function
     p = ts_model.forecast(1, state, ts_args)[0] # 1 for current period forecast
-    Jk, policy_k = _build_Jk_from_Jkplus1(Jkplus1_expected, p)
+    Jk, policy_k = _build_Jk_from_Jkplus1(Jkplus1_expected, p, Mc_k, Md_k)
     return state, Jk, policy_k
 
 
-def dp_optimize_cont_b(x0, ts_model, randomness_model, num_samples):
+def dp_optimize_cont_b(x0, ts_model, randomness_model, num_samples, Mc_set=None, Md_set=None):
     """
     Perform dynamic programming optimization for continuous battery levels.
 
@@ -474,12 +474,19 @@ def dp_optimize_cont_b(x0, ts_model, randomness_model, num_samples):
         - opt_horizon: number of periods
     - randomness_model: randomness model object with attributes:
     - num_samples: number of samples for expected PWL
+    - Mc_set: list of charging power limits if varying over time; default to Mc
+    - Md_set: list of discharging power limits if varying over time; default to Md
     
     Returns:
     - policy_sequence: list of optimal controls (u*) from k=0 to k=opt_horizon-1
     """
     print(f"max_num_x_states is {max_num_x_states}")
     print(f"Me is {Me}")
+    # 0. sepcify Mc and Md sets
+    if Mc_set is None:
+        Mc_set = [Mc] * opt_horizon
+    if Md_set is None:
+        Md_set = [Md] * opt_horizon
     # 1. initialization
     memo, policy = _generate_memo(x0, ts_model, randomness_model, opt_horizon)
     # 2. backward induction
@@ -492,7 +499,7 @@ def dp_optimize_cont_b(x0, ts_model, randomness_model, num_samples):
             ts_args = None
         print(f"Solving period {k}...")
         state_keys = list(memo[k].keys())
-        arg_list = [(k, state, memo, randomness_model, ts_model, num_samples, ts_args) for state in state_keys]
+        arg_list = [(k, state, memo, randomness_model, ts_model, num_samples, ts_args, Mc_set[k], Md_set[k]) for state in state_keys]
         with Pool() as pool:
             print(pool._processes)
             results = pool.starmap(_process_state, arg_list)
@@ -584,64 +591,67 @@ if __name__ == "__main__":
     from SeriesOpt.data_processing.holt_winters import HW_model
     from SeriesOpt.data_processing.randomness_models import DiscreteRandomness
 
-    Config.set_params({'Me': 4, 'Mc':1, 'Md':1, 'eta':0.9,
-                   'opt_horizon': 8})
+    Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
+                   'opt_horizon': 12})
     
     ############ Normal randomness; real prices ################
     randomness_model = NormalRandomness(Config.get_param('sigma'))
-    season = 4
-    Me = 4
+    season = Config.get_param('m')
     wd = os.getcwd()
 
     ############ PJM data ################
-    # price_pjm = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM.csv')
-    # # keep the price column only
-    # price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
-    # price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
-    # # split into train and test
-    # price_train = price_pjm[price_pjm.index.year!=2018]
-    # price_test = price_pjm[price_pjm.index.year==2018]
+    price_pjm = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM.csv')
+    # keep the price column only
+    price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
+    price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
+    # split into train and test
+    price_train = price_pjm[price_pjm.index.year!=2018]
+    price_test = price_pjm[price_pjm.index.year==2018]
 
-    # price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
-    # price_test = [price_test.iloc[i*24:(i+1)*24] for i in range(len(price_test)//24)]
-    # # find the optimal segmentation for each 24-hour period based on the training data
-    # segments = load_data.find_opt_season_group(price_train, season)
-    # # aggregate the training and testing data into segments
-    # price_train = load_data.aggregate_prices(price_train, segments)
-    # price_test = load_data.aggregate_prices(price_test, segments)
+    price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
+    price_test = [price_test.iloc[i*24:(i+1)*24] for i in range(len(price_test)//24)]
+    # find the optimal segmentation for each 24-hour period based on the training data
+    segments = load_data.find_opt_season_group(price_train, season)
+    print(segments)
+    # create Mc and Md sets based on segment length
+    Mc_set = [min(Me,seg[2]*Mc) for seg in segments]
+    Md_set = [min(Me,seg[2]*Md) for seg in segments]
+    print(Mc_set)
+    print(Md_set)
+    # aggregate the training and testing data into segments
+    price_train = load_data.aggregate_prices(price_train, segments)
+    price_test = load_data.aggregate_prices(price_test, segments)
 
     # # save aggregated prices
     # pd.DataFrame(price_train).to_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', index=False, header=False)
     # pd.DataFrame(price_test).to_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', index=False, header=False)
 
-    # load aggregated prices
-    price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
-    price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
-    # convert to numpy array
-    price_train = price_train.values.flatten()
-    price_test = price_test.values.flatten()
+    # # load aggregated prices
+    # price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
+    # price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
+    # # convert to numpy array
+    # price_train = price_train.values.flatten()
+    # price_test = price_test.values.flatten()
 
-    # ############### fit the HW model ################
+    ############### fit the HW model ################
     hw_model = HW_model(season)
     hw_model.fit(price_train, hyperparams={'alpha': 0.1, 'beta': 0.1, 'gamma': 0.275})
-    past_real_prices = price_test[: 8 * opt_horizon] # test a horizon where DP didn't perform well
-    hw_model.update(past_real_prices)
     x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
 
-    ############### Generate memoization table ###############
-    # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
-    # for k in range(opt_horizon):
-    #     print("k=", k, "num_states=", len(memo[k]))
-    #     print(memo[k].keys())
+    # ############### Generate memoization table ###############
+    # # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
+    # # for k in range(opt_horizon):
+    # #     print("k=", k, "num_states=", len(memo[k]))
+    # #     print(memo[k].keys())
 
     ################# DP optimization #################
     # turn on when needed
     start = time.time()
-    policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100)
+    policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
     end = time.time()
     print("DP optimization time:", end-start)
-    save_policy(policy, "SeriesOpt/tests/dp_cont_policy.pkl")
-    save_policy(memo, "SeriesOpt/tests/dp_cont_memo.pkl")
+    save_policy(policy, "SeriesOpt/tests/dp_cont_policy_12seg.pkl")
+    save_policy(memo, "SeriesOpt/tests/dp_cont_memo_12seg.pkl")
     # print("DP policy:", policy)
 
     ################# Apply DP policy #################

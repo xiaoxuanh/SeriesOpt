@@ -68,3 +68,31 @@ class DiscreteRandomness(RandomnessModel):
     
     def get_meta_data(self):
         return {'type': 'DiscreteRandomness', 'values': self.values, 'probabilities': self.probabilities}
+    
+from scipy.stats import gaussian_kde
+
+class EmpiricalKDERandomness(RandomnessModel):
+    """
+    Uses a Gaussian KDE to estimate the PDF from empirical residuals.
+    """
+
+    def __init__(self, residuals, bw_method='scott'):
+        self.residuals = np.asarray(residuals, dtype=float)
+        self.kde = gaussian_kde(self.residuals, bw_method=bw_method)
+        self.sigma = np.std(self.residuals)
+
+    def pdf(self, z):
+        # If z is scalar, we can just do:
+        return self.kde.evaluate(z)[0]  # returns an array
+        # If z is array, we might do .evaluate(z), returning array
+
+    def sample(self, nsamples=1):
+        samples = self.kde.resample(nsamples).flatten()
+        return samples
+
+    def get_meta_data(self):
+        return {
+            'type': 'EmpiricalKDERandomness',
+            'bandwidth': self.kde.factor,
+            'npoints': len(self.residuals),
+        }

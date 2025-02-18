@@ -91,6 +91,7 @@ class HW_model:
         self.cur_s = s
         self.cur_season_index = (t+1) % self.m 
         # move season index to the next unknown value; so that l+d+s[season_index] is the forecast for the next period
+        self.residuals = y[30:] - fitted[30:]
 
         self.hist_l = hist_l
         self.hist_d = hist_d

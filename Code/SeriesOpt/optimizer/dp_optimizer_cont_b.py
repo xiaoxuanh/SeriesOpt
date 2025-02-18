@@ -146,57 +146,102 @@ def _combine_func(scenarios):
 
     return PiecewiseLinearFunction(segments=new_segments)
 
+def _interpolate_pwl_across_neighbors(x_kplus1_cont, 
+                                      kdtree, 
+                                      index_to_state, 
+                                      memo_kplus1, 
+                                      k=3):
+    """
+    Finds the k nearest discrete states to x_kplus1_cont, retrieves their 
+    piecewise-linear cost-to-go, then merges (interpolates) them into a 
+    single PWL function using distance-based weights.
+
+    Returns: A PiecewiseLinearFunction instance representing the 
+             weighted combination of the neighbors' PWL.
+    """
+    # 1) Query k neighbors
+    # distances: shape (k,)
+    # nn_indices: shape (k,) - indices into index_to_state
+    distances, nn_indices = kdtree.query(x_kplus1_cont, k=k)  
+    # If k=1, they are scalars. If k>1, arrays. Ensure they are arrays:
+    if not hasattr(distances, '__len__'):
+        # Means k=1 was used
+        distances = np.array([distances])
+        nn_indices = np.array([nn_indices])
+    
+    # 2) Compute interpolation weights (inverse-distance or similar)
+    #    If any distance=0, to avoid divide-by-zero, 
+    #    you might handle separately or add small epsilon.
+    eps = 1e-8
+    inv_d = 1.0 / (distances + eps)
+    w_sum = np.sum(inv_d)
+    neighbor_weights = inv_d / w_sum
+    
+    # 3) Retrieve each neighbor's PWL function
+    neighbor_pwls = []
+    for (idx_n, w) in zip(nn_indices, neighbor_weights):
+        x_kplus1_disc = index_to_state[idx_n]
+        segments = memo_kplus1[x_kplus1_disc]
+        # Convert to your PWL class (assuming you have a constructor like below)
+        neighbor_pwls.append((w, PiecewiseLinearFunction(segments=segments)))
+    
+    # 4) Combine them into one PWL using the same approach as _combine_func
+    combined_pwl = _combine_func(neighbor_pwls)  # re-use the logic from your scenario combiner
+
+    return combined_pwl
+
 def _build_expected_pwl(
     xk, 
     memo_kplus1,   # dict: (x_{k+1} tuple) -> PiecewiseLinearFunction
     randomness_model,
     next_state_func,
     num_samples,
-    ts_args=None
+    ts_args=None,
+    k_neighbors=3
 ):
     """
-    Construct the PWL function for E[J_{k+1}(b, x_{k+1}(\epsilon))]
-    using a sample-based approach:
-      1) Generate eps samples from randomness_model (size = num_samples if given)
-      2) For each eps, compute x_{k+1} = next_state_func(xk, eps)
-      3) Nearest neighbor search => discrete x_{k+1} in memo_kplus1
-      4) Retrieve J_{k+1}(b, that x_{k+1}) => a PiecewiseLinearFunction
-      5) Weighted sum across eps to get one "expected" PWL.
+    Construct the PWL function for E[J_{k+1}(b, x_{k+1}(\epsilon))],
+    using a sample-based approach and *k*-NN interpolation.
 
-    combine_func: a function like combine_expected_pwl(scenarios) -> PWL
+    Steps:
+      1) Generate eps samples from randomness_model
+      2) For each eps, compute x_{k+1} = next_state_func(xk, eps)
+      3) Get *k* nearest neighbors in memo_kplus1, and interpolate them 
+         to form a single PWL
+      4) Weighted sum (by PDF or 1/num_samples) across samples to get an 
+         expected PWL (via _combine_func).
     """
-    # 1) sample epsilons
+    # 1) Sample epsilons
     eps_samples = randomness_model.sample(num_samples)
-    # We also might need to sum the pdf over each sample for total integral:
+    
+    # 2) Probability weights for each sample
     pdf_values = [randomness_model.pdf(e) for e in eps_samples]
     pdf_sum = sum(pdf_values)
-    # Alternatively, we can treat 1/num_samples as the weight if using simple MC.
 
-    scenario_list = []
-
-    # Build the KD-tree for nearest neighbor search
+    # 3) Build KD-tree
     kdtree, index_to_state = _build_state_kdtree(memo_kplus1)
 
+    # We'll collect (weight, PWL) for each scenario
+    scenario_list = []
+
     for i, eps_val in enumerate(eps_samples):
-        # 2) find x_{k+1} based on ts function
-        x_kplus1_cont = next_state_func(xk, eps_val, ts_args)  
-          # e.g. a function that returns an ND array or tuple
+        # 3a) Continuous next-state
+        x_kplus1_cont = next_state_func(xk, eps_val, ts_args)
 
-        # 3) nearest neighbor
-        dist, idx = kdtree.query(x_kplus1_cont)  
-          # idx is the row in index_to_state
-        x_kplus1_disc = index_to_state[idx]
+        # 3b) Interpolate among k neighbors
+        pwl_next = _interpolate_pwl_across_neighbors(
+            x_kplus1_cont,
+            kdtree,
+            index_to_state,
+            memo_kplus1,
+            k=k_neighbors
+        )
 
-        # 4) retrieve the piecewise function
-        pwl_next = memo_kplus1[ x_kplus1_disc ]
-        pwl_next = PiecewiseLinearFunction(segments=pwl_next)  # make a copy
-
-        # 5) build the scenario data => (prob, PWL)
-        # Let's define the weight as [pdf(eps_val)/pdf_sum]
-        weight_i = pdf_values[i]/pdf_sum
+        # 3c) Probability weight for this scenario
+        weight_i = pdf_values[i] / pdf_sum
         scenario_list.append((weight_i, pwl_next))
 
-    # 6) combine them
+    # 4) Combine scenario PWLs into one expected PWL
     Jkplus1_expected = _combine_func(scenario_list)
     return Jkplus1_expected
 
@@ -595,7 +640,6 @@ if __name__ == "__main__":
                    'opt_horizon': 12})
     
     ############ Normal randomness; real prices ################
-    randomness_model = NormalRandomness(Config.get_param('sigma'))
     season = Config.get_param('m')
     wd = os.getcwd()
 
@@ -637,7 +681,7 @@ if __name__ == "__main__":
     hw_model = HW_model(season)
     hw_model.fit(price_train, hyperparams={'alpha': 0.1, 'beta': 0.1, 'gamma': 0.275})
     x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
-
+    randomness_model = EmpiricalKDERandomness(hw_model.residuals)
     # ############### Generate memoization table ###############
     # # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
     # # for k in range(opt_horizon):

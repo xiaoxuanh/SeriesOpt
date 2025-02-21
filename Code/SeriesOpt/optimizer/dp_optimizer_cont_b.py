@@ -11,6 +11,7 @@ from SeriesOpt.config import Config
 from SeriesOpt.data_processing.randomness_models import *
 from SeriesOpt.data_processing.holt_winters import HW_model
 from SeriesOpt.data_processing import load_data
+from SeriesOpt.optimizer.lp_optimizer import lp_optimize
 from multiprocessing import Pool
 import os
 import itertools
@@ -189,6 +190,45 @@ def _interpolate_pwl_across_neighbors(x_kplus1_cont,
     combined_pwl = _combine_func(neighbor_pwls)  # re-use the logic from your scenario combiner
 
     return combined_pwl
+
+def _lp_terminal_pwl(num_points, p_forecast, Mc_set, Md_set):
+    """
+    Compute the terminal condition based on a linear programming approach.
+    For battery levels between b_min and b_max, sample num_points points.
+    For each battery level, solve the LP problem with forecast p_forecast 
+    over the given horizon (e.g. periods 25-48) and return the LP objective 
+    value. Then, construct a PiecewiseLinearFunction approximating the terminal value.
+    """
+    import numpy as np
+    b_values = np.linspace(0, Me, num_points)
+    objectives = []
+    for b in b_values:
+        lp_controls, lp_obj = lp_optimize(b, p_forecast, opt_horizon, Mc_set, Md_set)
+        objectives.append(lp_obj)
+    segments = []
+    for i in range(num_points - 1):
+        bL = b_values[i]
+        bR = b_values[i+1]
+        slope = (objectives[i+1] - objectives[i]) / (bR - bL)
+        intercept = objectives[i] - slope * bL
+        segments.append((bL, bR, slope, intercept))
+    # Merge adjacent segments that have nearly identical slopes.
+    merged_segments = []
+    if segments:
+        cur_seg = segments[0]
+        for seg in segments[1:]:
+            # If slopes differ less than tolerance, merge segments.
+            if abs(seg[2] - cur_seg[2]) < 1e-3:
+                # Merge: new segment extends from cur_seg[0] to seg[1],
+                # using the current slope and intercept from cur_seg.
+                cur_seg = (cur_seg[0], seg[1], cur_seg[2], cur_seg[3])
+            else:
+                merged_segments.append(cur_seg)
+                cur_seg = seg
+        merged_segments.append(cur_seg)
+
+    return PiecewiseLinearFunction(segments=merged_segments)
+
 
 def _build_expected_pwl(
     xk, 

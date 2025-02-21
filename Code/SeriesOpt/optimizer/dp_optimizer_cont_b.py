@@ -469,6 +469,7 @@ def _generate_memo(x0, ts_model, randomness_model, opt_horizon):
             ))
         )
         memo[k] = {state: PiecewiseLinearFunction() for state in state_keys_k}
+        print(f"Period {k} state space size: {len(memo[k])}")
     
     policy = copy.deepcopy(memo) # store the optimal policy for each state tuple
 
@@ -694,8 +695,8 @@ if __name__ == "__main__":
     policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
     end = time.time()
     print("DP optimization time:", end-start)
-    save_policy(policy, "SeriesOpt/tests/dp_cont_policy_12seg.pkl")
-    save_policy(memo, "SeriesOpt/tests/dp_cont_memo_12seg.pkl")
+    save_policy(policy, "SeriesOpt/tests/dp_cont_policy_6seg2horizon_50sigma.pkl")
+    # save_policy(memo, "SeriesOpt/tests/dp_cont_memo_12seg_50sigma.pkl")
     # print("DP policy:", policy)
 
     ################# Apply DP policy #################

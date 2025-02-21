@@ -13,8 +13,8 @@ class Config:
         'alpha': 0.01,
         'beta': 0.003,
         'gamma': 0.3,
-        'm': 12,
-        'sigma': 10,
+        'm': 6,
+        'sigma': 50,
         # parameters for ARIMA model
         'p': 1,
         'd': 1,

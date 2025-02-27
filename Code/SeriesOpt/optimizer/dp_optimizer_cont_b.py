@@ -191,43 +191,43 @@ def _interpolate_pwl_across_neighbors(x_kplus1_cont,
 
     return combined_pwl
 
-def _lp_terminal_pwl(num_points, p_forecast, Mc_set, Md_set):
-    """
-    Compute the terminal condition based on a linear programming approach.
-    For battery levels between b_min and b_max, sample num_points points.
-    For each battery level, solve the LP problem with forecast p_forecast 
-    over the given horizon (e.g. periods 25-48) and return the LP objective 
-    value. Then, construct a PiecewiseLinearFunction approximating the terminal value.
-    """
-    import numpy as np
-    b_values = np.linspace(0, Me, num_points)
-    objectives = []
-    for b in b_values:
-        lp_controls, lp_obj = lp_optimize(b, p_forecast, opt_horizon, Mc_set, Md_set)
-        objectives.append(lp_obj)
-    segments = []
-    for i in range(num_points - 1):
-        bL = b_values[i]
-        bR = b_values[i+1]
-        slope = (objectives[i+1] - objectives[i]) / (bR - bL)
-        intercept = objectives[i] - slope * bL
-        segments.append((bL, bR, slope, intercept))
-    # Merge adjacent segments that have nearly identical slopes.
-    merged_segments = []
-    if segments:
-        cur_seg = segments[0]
-        for seg in segments[1:]:
-            # If slopes differ less than tolerance, merge segments.
-            if abs(seg[2] - cur_seg[2]) < 1e-3:
-                # Merge: new segment extends from cur_seg[0] to seg[1],
-                # using the current slope and intercept from cur_seg.
-                cur_seg = (cur_seg[0], seg[1], cur_seg[2], cur_seg[3])
-            else:
-                merged_segments.append(cur_seg)
-                cur_seg = seg
-        merged_segments.append(cur_seg)
+# def _lp_terminal_pwl(num_points, p_forecast, Mc_set, Md_set):
+#     """
+#     Compute the terminal condition based on a linear programming approach.
+#     For battery levels between b_min and b_max, sample num_points points.
+#     For each battery level, solve the LP problem with forecast p_forecast 
+#     over the given horizon (e.g. periods 25-48) and return the LP objective 
+#     value. Then, construct a PiecewiseLinearFunction approximating the terminal value.
+#     """
+#     import numpy as np
+#     b_values = np.linspace(0, Me, num_points)
+#     objectives = []
+#     for b in b_values:
+#         lp_controls, lp_obj = lp_optimize(b, p_forecast, opt_horizon, Mc_set, Md_set, return_obj=True)
+#         objectives.append(lp_obj)
+#     segments = []
+#     for i in range(num_points - 1):
+#         bL = b_values[i]
+#         bR = b_values[i+1]
+#         slope = (objectives[i+1] - objectives[i]) / (bR - bL)
+#         intercept = objectives[i] - slope * bL
+#         segments.append((bL, bR, slope, intercept))
+#     # Merge adjacent segments that have nearly identical slopes.
+#     merged_segments = []
+#     if segments:
+#         cur_seg = segments[0]
+#         for seg in segments[1:]:
+#             # If slopes differ less than tolerance, merge segments.
+#             if abs(seg[2] - cur_seg[2]) < 1e-3:
+#                 # Merge: new segment extends from cur_seg[0] to seg[1],
+#                 # using the current slope and intercept from cur_seg.
+#                 cur_seg = (cur_seg[0], seg[1], cur_seg[2], cur_seg[3])
+#             else:
+#                 merged_segments.append(cur_seg)
+#                 cur_seg = seg
+#         merged_segments.append(cur_seg)
 
-    return PiecewiseLinearFunction(segments=merged_segments)
+#     return PiecewiseLinearFunction(segments=merged_segments)
 
 
 def _build_expected_pwl(
@@ -490,6 +490,12 @@ def _generate_memo(x0, ts_model, randomness_model, opt_horizon):
     """
     memo = defaultdict(dict) # store the value function J_k(b) for each state tuple
     state_ranges = ts_model.dp_generate_state_range(x0, randomness_model, opt_horizon) # list (period) of list of states
+
+    # if state_ranges is a dictionary already, i.e. coming from discrete randomness, just use it
+    if isinstance(state_ranges, dict):
+        policy = copy.deepcopy(state_ranges)
+        return state_ranges, policy
+
     for k in range(opt_horizon):
         state_keys_k = []
         # create states within ranges
@@ -677,65 +683,66 @@ if __name__ == "__main__":
     from SeriesOpt.data_processing.holt_winters import HW_model
     from SeriesOpt.data_processing.randomness_models import DiscreteRandomness
 
-    Config.set_params({'Me': 2, 'Mc':1, 'Md':1, 'eta':0.9,
-                   'opt_horizon': 12})
     
-    ############ Normal randomness; real prices ################
-    season = Config.get_param('m')
-    wd = os.getcwd()
+    # ############ Normal randomness; real prices ################
+    # season = Config.get_param('m')
+    # wd = os.getcwd()
 
-    ############ PJM data ################
-    price_pjm = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM.csv')
-    # keep the price column only
-    price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
-    price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
-    # split into train and test
-    price_train = price_pjm[price_pjm.index.year!=2018]
-    price_test = price_pjm[price_pjm.index.year==2018]
+    # ############ PJM data ################
+    # price_pjm = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM.csv')
+    # # keep the price column only
+    # price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
+    # price_pjm = price_pjm[['Date',' Zonal COMED price']].set_index('Date')[' Zonal COMED price'].asfreq('H')
+    # # split into train and test
+    # price_train = price_pjm[price_pjm.index.year!=2018]
+    # price_test = price_pjm[price_pjm.index.year==2018]
 
-    price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
-    price_test = [price_test.iloc[i*24:(i+1)*24] for i in range(len(price_test)//24)]
-    # find the optimal segmentation for each 24-hour period based on the training data
-    segments = load_data.find_opt_season_group(price_train, season)
-    print(segments)
-    # create Mc and Md sets based on segment length
-    Mc_set = [min(Me,seg[2]*Mc) for seg in segments]
-    Md_set = [min(Me,seg[2]*Md) for seg in segments]
-    print(Mc_set)
-    print(Md_set)
-    # aggregate the training and testing data into segments
-    price_train = load_data.aggregate_prices(price_train, segments)
-    price_test = load_data.aggregate_prices(price_test, segments)
+    # price_train = [price_train.iloc[i*24:(i+1)*24] for i in range(len(price_train)//24)]
+    # price_test = [price_test.iloc[i*24:(i+1)*24] for i in range(len(price_test)//24)]
+    # # find the optimal segmentation for each 24-hour period based on the training data
+    # segments = load_data.find_opt_season_group(price_train, season)
+    # print(segments)
+    # # create Mc and Md sets based on segment length
+    # Mc_set = [min(Me,seg[2]*Mc) for seg in segments]
+    # Md_set = [min(Me,seg[2]*Md) for seg in segments]
+    # # extend Mc and Md sets to the length of the optimization horizon
+    # Mc_set = Mc_set * (opt_horizon // len(Mc_set))
+    # Md_set = Md_set * (opt_horizon // len(Md_set))
+    # print(Mc_set)
+    # print(Md_set)
+    # # aggregate the training and testing data into segments
+    # price_train = load_data.aggregate_prices(price_train, segments)
+    # price_test = load_data.aggregate_prices(price_test, segments)
 
-    # # save aggregated prices
-    # pd.DataFrame(price_train).to_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', index=False, header=False)
-    # pd.DataFrame(price_test).to_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', index=False, header=False)
+    # # # save aggregated prices
+    # # pd.DataFrame(price_train).to_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', index=False, header=False)
+    # # pd.DataFrame(price_test).to_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', index=False, header=False)
 
-    # # load aggregated prices
-    # price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
-    # price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
-    # # convert to numpy array
-    # price_train = price_train.values.flatten()
-    # price_test = price_test.values.flatten()
+    # # # load aggregated prices
+    # # price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
+    # # price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
+    # # # convert to numpy array
+    # # price_train = price_train.values.flatten()
+    # # price_test = price_test.values.flatten()
 
-    ############### fit the HW model ################
-    hw_model = HW_model(season)
-    hw_model.fit(price_train, hyperparams={'alpha': 0.1, 'beta': 0.1, 'gamma': 0.275})
-    x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
-    randomness_model = EmpiricalKDERandomness(hw_model.residuals)
-    # ############### Generate memoization table ###############
-    # # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
-    # # for k in range(opt_horizon):
-    # #     print("k=", k, "num_states=", len(memo[k]))
-    # #     print(memo[k].keys())
+    # ############### fit the HW model ################
+    # hw_model = HW_model(season)
+    # hw_model.fit(price_train, hyperparams={'alpha': 0.1, 'beta': 0.1, 'gamma': 0.275})
+    # x0 = [hw_model.cur_l, hw_model.cur_d, *hw_model.cur_s]
+    # randomness_model = EmpiricalKDERandomness(hw_model.residuals)
+    # # ############### Generate memoization table ###############
+    # # # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
+    # # # for k in range(opt_horizon):
+    # # #     print("k=", k, "num_states=", len(memo[k]))
+    # # #     print(memo[k].keys())
 
-    ################# DP optimization #################
-    # turn on when needed
-    start = time.time()
-    policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
-    end = time.time()
-    print("DP optimization time:", end-start)
-    save_policy(policy, "SeriesOpt/tests/dp_cont_policy_6seg2horizon_50sigma.pkl")
+    # ################# DP optimization #################
+    # # turn on when needed
+    # start = time.time()
+    # policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
+    # end = time.time()
+    # print("DP optimization time:", end-start)
+    # save_policy(policy, "SeriesOpt/tests/dp_cont_policy_4seg2horizon_50sigma.pkl")
     # save_policy(memo, "SeriesOpt/tests/dp_cont_memo_12seg_50sigma.pkl")
     # print("DP policy:", policy)
 
@@ -751,3 +758,16 @@ if __name__ == "__main__":
     # print("Control sequence:", u_sequence)
     # print("Battery sequence:", b_sequence)
     # print("Real prices:", real_prices)
+
+    ######################### Discrete randomness; synthetic data ############################
+    level = np.random.randint(-10, 30)
+    trend = np.random.randint(-2,3)
+    season = [int(x) for x in np.random.randint(-5, 10, 4)]
+    x0 = [level, trend, *season]
+    randomness_model = DiscreteRandomness([-10, 0, 10], [0.2, 0.6, 0.2])
+    print(f"Problem 0: level = {level}, trend = {trend}, season = {season}")
+    start = time.time()
+    ts_instance = HW_model(4, level, trend, season,0)
+    # Initialize the memo dictionary
+    memo, policy = dp_optimize_cont_b(x0, ts_instance, randomness_model, 100)
+    end = time.time()

@@ -157,7 +157,7 @@ class HW_model:
 
         for t in range(n_periods):
             # Calculate the value at time t
-            epsilon = randomness_model.sample()
+            epsilon = randomness_model.sample()[0]
             value = self.cur_l + self.cur_d + self.cur_s[self.cur_season_index] + epsilon
             synthetic_series.append((self.cur_season_index, self.cur_l, self.cur_d, 
                                  self.cur_s[self.cur_season_index], 
@@ -205,6 +205,19 @@ class HW_model:
         :param opt_horizon: Number of periods to optimize
         :return: Memo table
         """
+        if hasattr(randomness_model, 'sigma'):
+            return self.generate_state_range_continuous(init_state, randomness_model, opt_horizon)
+        else:
+            return self.generate_state_range_discrete(init_state, randomness_model, opt_horizon)
+        
+    def generate_state_range_continuous(self, init_state, randomness_model, opt_horizon):
+        """
+        Generate the memo table for the DP model with continuous randomness.
+        :param init_state: Initial state
+        :param randomness_model: Randomness model
+        :param opt_horizon: Number of periods to optimize
+        :return: Memo table
+        """
         state_range = [list() for _ in range(opt_horizon)]
         l0, t0, *s0 = init_state
 
@@ -224,6 +237,8 @@ class HW_model:
             # specify relevant seasons. Towards the end of the optimization horizon, some seasons no longer matter.
             cur_season_index = k % self.m # assumes the season index starts from 0
             relevant_seasons = [(cur_season_index + j) % self.m for j in range(opt_horizon - k)]
+            # make all seasons relevant
+            # relevant_seasons = range(self.m)
             for i in range(self.m):
                 if i in relevant_seasons:
                     if i < k % self.m:
@@ -243,6 +258,42 @@ class HW_model:
         
         return state_range
     
+    def generate_state_range_discrete(self, initial_state, randomness_model, opt_horizon):
+        """
+        generate the memo table for the DP model with discrete randomness
+        """
+        memo = defaultdict(dict)
+        initial_state = tuple(initial_state)
+        memo[0][initial_state] = []
+
+        for k in range(opt_horizon - 1):
+            # Determine relevant seasons for period k
+            # Relevant seasons are those that will be used in future periods
+            cur_season_index = k % self.m 
+            future_season_indices = [(cur_season_index + i) % self.m for i in range(opt_horizon - k)]
+            relevant_seasons = set(future_season_indices)
+            mask = np.isin(np.arange(self.m), list(relevant_seasons), invert=True) # Mask for irrelevant seasons
+
+            # Iterate over all states at time k
+            for xk in memo[k]:
+                xk_list = list(xk)
+                # compute the mean next state when epsilon = 0
+                next_x_mean = list(self.dp_func_transition(xk_list, 0, cur_season_index))
+                # For each possible value of epsilon, compute the next state
+                for epsilon in randomness_model.values:
+                    next_x = list(self.dp_func_transition(xk_list, epsilon, cur_season_index))
+                    # override the season parameters with next_x_mean if the season is not relevant
+                    next_x_mean[2:2+self.m] = np.array(next_x_mean[2:2+self.m], dtype=float)
+                    next_x[2:2+self.m] = np.array(next_x[2:2+self.m], dtype=float)
+                    # Now apply the np.where logic
+                    next_x[2:2+self.m] = np.where(mask, next_x_mean[2:2+self.m], next_x[2:2+self.m])
+                    next_x = tuple(np.round(next_x, decimals=2)) 
+                    if next_x not in memo[k + 1]:
+                        memo[k + 1][next_x] = []
+            
+            print(k, len(memo[k]))
+        return memo
+
 
 if __name__ == "__main__":
     import os

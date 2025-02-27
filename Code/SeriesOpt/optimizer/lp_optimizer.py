@@ -14,7 +14,7 @@ Me = Config.get_param('Me')
 eta = Config.get_param('eta')
 # print(Mc, Md, Me, eta)
 
-def lp_optimize(b0, p_forecast, H, Mc_set=None, Md_set=None) -> pd.DataFrame:
+def lp_optimize(b0, p_forecast, H, Mc_set=None, Md_set=None, return_obj = False) -> pd.DataFrame:
     """
     A linear optimization model.
     Within each step, given knowledge of current charging state and price forecast,
@@ -123,8 +123,10 @@ def lp_optimize(b0, p_forecast, H, Mc_set=None, Md_set=None) -> pd.DataFrame:
     
     control_results = pd.DataFrame(control_results, columns=['name', 'index', 'value'])
     
-    # return control results and optimal objective value
-    return control_results
+    if return_obj:
+        return control_results, value(model.obj)
+    else:
+        return control_results
 
 if __name__ == "__main__":
     # Example usage

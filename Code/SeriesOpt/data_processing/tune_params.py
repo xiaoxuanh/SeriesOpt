@@ -1,8 +1,9 @@
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
-from bayes_opt import BayesianOptimization
+# from bayes_opt import BayesianOptimization
 from ..config import Config
 from itertools import product
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
 opt_horizon = Config.get_param('opt_horizon')
 
@@ -16,6 +17,24 @@ def rMAE(actual, predicted, naive_predictions):
     actual, predicted = np.array(actual), np.array(predicted)
     naive_predictions = np.array(naive_predictions)
     return np.sum(np.abs(actual - predicted)) / np.sum(np.abs(actual - naive_predictions))
+
+def MASE(actual, predicted, naive_predictions):
+    actual, predicted = np.array(actual), np.array(predicted)
+    naive_predictions = np.array(naive_predictions)
+    return np.mean(np.abs(actual - predicted)) / np.mean(np.abs(actual - naive_predictions))
+
+def MASE_iderror(actual, predicted, naive_predictions):
+    actual, predicted = np.array(actual), np.array(predicted)
+    naive_predictions = np.array(naive_predictions)
+    mase = np.mean(np.abs(actual - predicted)) / np.mean(np.abs(actual - naive_predictions))
+    # calculate the lb stat of errors
+    error = actual - predicted
+    lb_stat = np.min(acorr_ljungbox(error, lags=4)['lb_pvalue'].values)
+    # return a high value if the lb_stat is significant
+    if lb_stat < 0.05:
+        return np.inf
+    else:
+        return mase
 
 # def time_series_cross_val(ts_instance, price_train, params):
 #     """
@@ -48,7 +67,7 @@ def disjoint_time_series_cross_val(ts_instance, price_train, params):
     n = len(price_train)
     n_splits = 10 # Number of disjoint splits
     split_size = n // (n_splits + 1)  # Size of each split, leaving room for test sets
-    mape_scores = []
+    mase_scores = []
 
     for i in range(n_splits):
         # Determine training and test indices
@@ -65,9 +84,9 @@ def disjoint_time_series_cross_val(ts_instance, price_train, params):
         # Fit and forecast
         ts_instance.fit(train, hyperparams=params)
         predictions = ts_instance.forecast(opt_horizon)
-        mape_scores.append(MAPE(test, predictions))
+        mase_scores.append(MASE_iderror(test, predictions, price_train[train_end - opt_horizon:train_end]))
 
-    return -np.mean(mape_scores)  # Negative because Bayesian optimization maximizes
+    return -np.mean(mase_scores)  # Negative because Bayesian optimization maximizes
 
 # not working well
 # def Bayesian_optimize_tune_params(ts_instance, price_train, param_dict):

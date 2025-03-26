@@ -91,7 +91,7 @@ class HW_model:
         self.cur_s = s
         self.cur_season_index = (t+1) % self.m 
         # move season index to the next unknown value; so that l+d+s[season_index] is the forecast for the next period
-        self.residuals = y[30:] - fitted[30:]
+        self.residuals = y[5*self.m:] - fitted[5*self.m:]
 
         self.hist_l = hist_l
         self.hist_d = hist_d
@@ -179,6 +179,49 @@ class HW_model:
 
         return synthetic_series
 
+    def generate_series_ARerror(self, n_periods, randomness_model):
+        """
+        Generates a synthetic Holt-Winters style time series with random level, trend, and seasonality (optional).
+        
+        Parameters:
+        - n_periods: Total number of periods in the time series.
+        - self.cur_l: Initial level of the series.
+        - self.cur_d: Trend slope for each period.
+        - self.cur_s: List of seasonal effects.
+        
+        Returns:
+        - synthetic_series: Generated time series as a numpy array with seasonality index, seasonality value, level, and trend.
+        """
+        # Initialize the series
+        synthetic_series = []
+        old_epsilon = 0
+        for t in range(n_periods):
+            # Calculate the value at time t
+            epsilon = old_epsilon*0.6 + randomness_model.sample()[0]
+            value = self.cur_l + self.cur_d + self.cur_s[self.cur_season_index] + epsilon
+            synthetic_series.append((self.cur_season_index, self.cur_l, self.cur_d, 
+                                 self.cur_s[self.cur_season_index], 
+                                 value))
+            
+            # update level
+            self.cur_l = self.cur_l + self.cur_d + self.alpha * epsilon
+            self.cur_s[self.cur_season_index] = self.cur_s[self.cur_season_index] + (self.cur_d+epsilon)*self.gamma
+            self.cur_d = self.cur_d + self.alpha*self.beta * epsilon
+            self.cur_season_index = (self.cur_season_index + 1) % self.m
+
+            old_epsilon = epsilon
+
+        # Convert to pandas DataFrame for easier manipulation
+        synthetic_series = np.array(synthetic_series, dtype=[('seasonality_index', 'i4'), 
+                                                        ('level', 'f4'), 
+                                                        ('trend', 'f4'),
+                                                        ('seasonality_value', 'f4'),  
+                                                        ('value', 'f4')])
+        synthetic_series = pd.DataFrame(synthetic_series, columns=['seasonality_index', 'level', 'trend', 'seasonality_value', 'value'])
+
+        return synthetic_series
+
+
     def dp_func_transition(self, state, epsilon, cur_season_index):
         """
         Transition function for the DP model.
@@ -197,7 +240,7 @@ class HW_model:
         
         return (l_new, t_new, *s_new)
     
-    def dp_generate_state_range(self, init_state, randomness_model, opt_horizon):
+    def dp_generate_state_range(self, init_state, randomness_models, opt_horizon):
         """
         Generate the memo table for the DP model.
         :param init_state: Initial state
@@ -205,12 +248,12 @@ class HW_model:
         :param opt_horizon: Number of periods to optimize
         :return: Memo table
         """
-        if hasattr(randomness_model, 'sigma'):
-            return self.generate_state_range_continuous(init_state, randomness_model, opt_horizon)
+        if hasattr(randomness_models[0], 'sigma'):
+            return self.generate_state_range_continuous(init_state, randomness_models, opt_horizon)
         else:
-            return self.generate_state_range_discrete(init_state, randomness_model, opt_horizon)
+            return self.generate_state_range_discrete(init_state, randomness_models, opt_horizon)
         
-    def generate_state_range_continuous(self, init_state, randomness_model, opt_horizon):
+    def generate_state_range_continuous(self, init_state, randomness_models, opt_horizon):
         """
         Generate the memo table for the DP model with continuous randomness.
         :param init_state: Initial state
@@ -222,6 +265,10 @@ class HW_model:
         l0, t0, *s0 = init_state
 
         for k in range(opt_horizon):
+            # if randomness_models is a list, use the corresponding randomness model for the period;
+            # otherwise, use the same randomness model for all periods
+            randomness_model = randomness_models[k % self.m] if isinstance(randomness_models, list) else randomness_models
+
             period_range = []
             l_variance_term = np.sqrt(self.beta**2 * (k*(k-1)*(2*k-1)/6) 
                                   + self.beta * k*(k-1) + k) * self.alpha * randomness_model.sigma

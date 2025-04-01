@@ -141,7 +141,7 @@ class SARIMA_model:
         self.Z = Z
 
     
-    def forecast(self, h, state=None):
+    def forecast(self, h, state=None, ts_args=None):
         """
         Forecast future values
         
@@ -164,7 +164,7 @@ class SARIMA_model:
             forecasts = np.zeros(h)
             # Current state for iteration
             current_state = state.copy()
-            pdb.set_trace()
+            # pdb.set_trace()
             for i in range(h):
                 # Generate forecast for the next period
                 forecasts[i] = self.Z @ current_state
@@ -190,8 +190,13 @@ class SARIMA_model:
         new_data = np.array(new_data)
         
         for val in new_data:
-            # Update the model with each new observation
-            self.current_state = self.dp_func_transition(self.current_state, val)
+            # update the fitted values
+            self.fitted = np.append(self.fitted, self.results.forecast(steps=1)[-1])
+            # Update the residuals
+            self.residuals = np.append(self.residuals, val - self.fitted[-1])
+            # Update the state vector with the new observation
+            self.current_state = self.dp_func_transition(self.current_state, self.residuals[-1])
+
 
     
     def generate_series(self, n_periods, randomness_model):
@@ -220,7 +225,7 @@ class SARIMA_model:
         
         return simulated
     
-    def dp_func_transition(self, state, epsilon):
+    def dp_func_transition(self, state, epsilon, cur_season_index=None):
         """
         Construct the transition matrix T and input vector R for a SARIMA(1,0,1)×(1,0,1)_m model.
         Then update the state vector based on the transition function.
@@ -272,6 +277,36 @@ class SARIMA_model:
          # Compute expected state and variance for each period
         for k in range(opt_horizon):
             randomness_model = randomness_models[k % self.m] if isinstance(randomness_models, list) else randomness_models
+
+            ########### get mask of relevant indices for this period and future periods
+            relevant_mask = np.zeros(state_dim, dtype=bool)
+            for future_k in range(k, opt_horizon):
+                # indices that will be used
+                p1_idx = future_k - k # relative position of p_{k-1}
+                pm_idx = future_k - k + self.m - 1 # relative position of p_{k-m}
+                p1e1_idx = future_k - k + self.m # relative position of p_{k-m-1}
+
+                # if these indices are within the state vector, set the mask to True
+                if p1_idx < self.m + 1:
+                    relevant_mask[p1_idx] = True
+                if pm_idx < self.m + 1:
+                    relevant_mask[pm_idx] = True
+                if p1e1_idx < self.m + 1:
+                    relevant_mask[p1e1_idx] = True
+                
+                # indices for error terms
+                e1_idx = future_k - k + self.m + 1 # relative position of e_{k-1}
+                em_idx = future_k - k + 2*self.m # relative position of e_{k-m}
+                e1e1_idx = future_k - k + 2*self.m + 1 # relative position of e_{k-m-1}
+
+                # if these indices are within the state vector, set the mask to True
+                if e1_idx < 2*self.m + 2:
+                    relevant_mask[e1_idx] = True
+                if em_idx < 2*self.m + 2:
+                    relevant_mask[em_idx] = True
+                if e1e1_idx < 2*self.m + 2:
+                    relevant_mask[e1e1_idx] = True
+
             # Deterministic part: Expected state at period k
             expected_state = np.linalg.matrix_power(self.T,k) @ x0  # Matrix power using ** operator
             # Stochastic part: Compute the full covariance matrix using the formula
@@ -294,7 +329,10 @@ class SARIMA_model:
 
             period_range = []
             for i in range(state_dim):
-                period_range.append((expected_state[i] - ci_width[i], expected_state[i] + ci_width[i]))
+                if relevant_mask[i]:
+                    period_range.append((expected_state[i] - ci_width[i], expected_state[i] + ci_width[i]))
+                else:
+                    period_range.append((expected_state[i], expected_state[i]))
             
             state_range[k] = period_range
         

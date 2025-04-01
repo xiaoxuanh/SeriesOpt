@@ -11,6 +11,7 @@ from SeriesOpt.config import Config
 from SeriesOpt.data_processing.randomness_models import *
 from SeriesOpt.data_processing.holt_winters import HW_model
 from SeriesOpt.data_processing.ar1 import AR1_model
+from SeriesOpt.data_processing.sarima import SARIMA_model
 from SeriesOpt.data_processing import load_data
 from SeriesOpt.optimizer.lp_optimizer import lp_optimize
 from multiprocessing import Pool
@@ -642,6 +643,9 @@ def apply_dp(real_prices, ts_model, dp_policy, b):
         xk = (ts_model.cur_l, ts_model.cur_d, *ts_model.cur_s)
     if ts_model.model_name == 'AR1':
         xk = (ts_model.current_state)
+    if ts_model.model_name == 'SARIMA':
+        xk = (ts_model.current_state)
+
 
     u_sequence = []
     profit_sequence = []
@@ -690,10 +694,10 @@ if __name__ == "__main__":
 
     
     # ############ Normal randomness; real prices ################
-    # season = Config.get_param('m')
-    # wd = os.getcwd()
+    season = Config.get_param('m')
+    wd = os.getcwd()
 
-    # ############ PJM data ################
+    ############ PJM data ################
     # price_pjm = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM.csv')
     # # keep the price column only
     # price_pjm['Date'] = pd.to_datetime(price_pjm['Date'])
@@ -719,16 +723,16 @@ if __name__ == "__main__":
     # price_train = load_data.aggregate_prices(price_train, segments)
     # price_test = load_data.aggregate_prices(price_test, segments)
 
-    # # # save aggregated prices
-    # # pd.DataFrame(price_train).to_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', index=False, header=False)
-    # # pd.DataFrame(price_test).to_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', index=False, header=False)
+    # # save aggregated prices
+    # pd.DataFrame(price_train).to_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', index=False, header=False)
+    # pd.DataFrame(price_test).to_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', index=False, header=False)
 
-    # # # load aggregated prices
-    # # price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
-    # # price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
-    # # # convert to numpy array
-    # # price_train = price_train.values.flatten()
-    # # price_test = price_test.values.flatten()
+    # load aggregated prices
+    price_train = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_train_agg.csv', header=None)
+    price_test = pd.read_csv(os.path.dirname(wd)+'\\Data\\PJM_test_agg.csv', header=None)
+    # convert to numpy array
+    price_train = price_train.values.flatten()
+    price_test = price_test.values.flatten()
 
     # ############### fit the HW model ################
     # hw_model = HW_model(season)
@@ -741,10 +745,29 @@ if __name__ == "__main__":
     # # #     print("k=", k, "num_states=", len(memo[k]))
     # # #     print(memo[k].keys())
 
+    ############### fit the SARIMA model ################
+    ts_model = SARIMA_model(m=4)
+    ts_model.fit(price_train)
+    x0 = ts_model.current_state
+    # residuals = ts_model.residuals
+    # randomness_models = []
+    # for i in range(season):
+    #     data = residuals[i::season]
+    #     model = EmpiricalKDERandomness(data)
+    #     randomness_models.append(model)
+    # ############### Generate memoization table ###############
+    # # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
+    # # for k in range(opt_horizon):
+    # #     print("k=", k, "num_states=", len(memo[k]))
+    # #     print(memo[k].keys())
+
     # ################# DP optimization #################
     # # turn on when needed
+    # Mc_set = [2, 2, 2, 2, 2, 2, 2, 2]
+    # Md_set = [2, 2, 2, 2, 2, 2, 2, 2]
     # start = time.time()
-    # policy, memo = dp_optimize_cont_b(x0, hw_model, randomness_model, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
+    # x0 = ts_model.current_state
+    # policy, memo = dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
     # end = time.time()
     # print("DP optimization time:", end-start)
     # save_policy(policy, "SeriesOpt/tests/dp_cont_policy_4seg2horizon_50sigma.pkl")
@@ -752,22 +775,22 @@ if __name__ == "__main__":
     # print("DP policy:", policy)
 
     ################# Apply DP policy #################
-    with open("SeriesOpt/tests/250311_lpvdp_empiricalerrorbyseason/semireal_dp_4m8h_policy_0.pkl", 'rb') as f:
+    with open("SeriesOpt/tests/250311_lpvdp_empiricalerrorbyseason/sarima_semireal_dp_4m8h_policy_0.pkl", 'rb') as f:
         policy = pickle.load(f)
     # ar1_model = AR1_model()
     # ar1_model.fit([10, 11, 9, 8, 15, 3, 7, 6])
     real_prices = np.array([ -6.0956273,  21.94816  , -25.797834 ,   8.950453 , -62.649036 ,
        124.76675  , -27.281584 , -18.060457 ])
     
-    x0 = np.array([4004.847209213908,
-                    -0.010869743533163162,
-                    -3983.432185396135,
-                    -3979.7203178942605,
-                    -3982.196617669392,
-                    -3980.435594682726])
-    ts_instance = HW_model(4, x0[0],x0[1],x0[2:],0)
+    # x0 = np.array([4004.847209213908,
+    #                 -0.010869743533163162,
+    #                 -3983.432185396135,
+    #                 -3979.7203178942605,
+    #                 -3982.196617669392,
+    #                 -3980.435594682726])
+    # ts_instance = HW_model(4, x0[0],x0[1],x0[2:],0)
 
-    profit_sequence, u_sequence, b_sequence = apply_dp(real_prices, ts_instance, policy, 0)
+    profit_sequence, u_sequence, b_sequence = apply_dp(real_prices, ts_model, policy, 0)
     print("Profit sequence:", profit_sequence)
     print("Control sequence:", u_sequence)
     print("Battery sequence:", b_sequence)

@@ -25,7 +25,7 @@ class Config:
         # parameters for DP optimizer
         'max_num_b_states': 4, # number of b states for discretization
         'max_b_step_size': 1, # maximum step size for b states; the smaller the steps the more number of states
-        'max_num_x_steps': 3, # number of x states for discretization; will explode by the order of m+2 for level, trend, seasonality
+        'max_num_x_steps': 10, # number of x states for discretization; will explode by the order of m+2 for level, trend, seasonality
         'min_x_step_size': 1, # minimum step size for x states; the smaller the steps the more number of states
     }
 

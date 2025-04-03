@@ -91,7 +91,7 @@ class HW_model:
         self.cur_s = s
         self.cur_season_index = (t+1) % self.m 
         # move season index to the next unknown value; so that l+d+s[season_index] is the forecast for the next period
-        self.residuals = y[5*self.m:] - fitted[5*self.m:]
+        self.residuals = y[50*self.m:] - fitted[50*self.m:]
 
         self.hist_l = hist_l
         self.hist_d = hist_d
@@ -120,7 +120,7 @@ class HW_model:
         """
         l = self.cur_l
         d = self.cur_d
-        s = self.cur_s
+        s = self.cur_s.copy()
         season_index = self.cur_season_index
         # Iterative training
         for t in range(0, len(new_data)):
@@ -139,7 +139,7 @@ class HW_model:
         self.cur_season_index = season_index
 
 
-    def generate_series(self, n_periods, randomness_model):
+    def generate_series(self, n_periods, randomness_models):
         """
         Generates a synthetic Holt-Winters style time series with random level, trend, and seasonality (optional).
         
@@ -148,26 +148,28 @@ class HW_model:
         - self.cur_l: Initial level of the series.
         - self.cur_d: Trend slope for each period.
         - self.cur_s: List of seasonal effects.
+        - randomness_models: List of randomness models for each season.
         
         Returns:
         - synthetic_series: Generated time series as a numpy array with seasonality index, seasonality value, level, and trend.
         """
         # Initialize the series
         synthetic_series = []
-
+        cur_l, cur_d, cur_season_index = self.cur_l, self.cur_d, self.cur_season_index
+        cur_s = self.cur_s.copy() # make a copy of the current seasonality values
         for t in range(n_periods):
             # Calculate the value at time t
-            epsilon = randomness_model.sample()[0]
-            value = self.cur_l + self.cur_d + self.cur_s[self.cur_season_index] + epsilon
-            synthetic_series.append((self.cur_season_index, self.cur_l, self.cur_d, 
-                                 self.cur_s[self.cur_season_index], 
+            epsilon = randomness_models[t%self.m].sample()[0] if len(randomness_models)>1 else randomness_models[0].sample()[0]
+            value = cur_l + cur_d + cur_s[cur_season_index] + epsilon
+            synthetic_series.append((cur_season_index, cur_l, cur_d, 
+                                 cur_s[cur_season_index], 
                                  value))
             
             # update level
-            self.cur_l = self.cur_l + self.cur_d + self.alpha * epsilon
-            self.cur_s[self.cur_season_index] = self.cur_s[self.cur_season_index] + (self.cur_d+epsilon)*self.gamma
-            self.cur_d = self.cur_d + self.alpha*self.beta * epsilon
-            self.cur_season_index = (self.cur_season_index + 1) % self.m
+            cur_l = cur_l + cur_d + self.alpha * epsilon
+            cur_s[cur_season_index] = cur_s[cur_season_index] + (cur_d+epsilon)*self.gamma
+            cur_d = cur_d + self.alpha*self.beta * epsilon
+            cur_season_index = (cur_season_index + 1) % self.m
 
         # Convert to pandas DataFrame for easier manipulation
         synthetic_series = np.array(synthetic_series, dtype=[('seasonality_index', 'i4'), 
@@ -195,19 +197,21 @@ class HW_model:
         # Initialize the series
         synthetic_series = []
         old_epsilon = 0
+        cur_l, cur_d, cur_season_index = self.cur_l, self.cur_d, self.cur_season_index
+        cur_s = self.cur_s.copy() # make a copy of the current seasonality values
         for t in range(n_periods):
             # Calculate the value at time t
             epsilon = old_epsilon*0.6 + randomness_model.sample()[0]
-            value = self.cur_l + self.cur_d + self.cur_s[self.cur_season_index] + epsilon
-            synthetic_series.append((self.cur_season_index, self.cur_l, self.cur_d, 
-                                 self.cur_s[self.cur_season_index], 
+            value = cur_l + cur_d + cur_s[cur_season_index] + epsilon
+            synthetic_series.append((cur_season_index, cur_l, cur_d, 
+                                 cur_s[cur_season_index], 
                                  value))
             
             # update level
-            self.cur_l = self.cur_l + self.cur_d + self.alpha * epsilon
-            self.cur_s[self.cur_season_index] = self.cur_s[self.cur_season_index] + (self.cur_d+epsilon)*self.gamma
-            self.cur_d = self.cur_d + self.alpha*self.beta * epsilon
-            self.cur_season_index = (self.cur_season_index + 1) % self.m
+            cur_l = cur_l + cur_d + self.alpha * epsilon
+            cur_s[cur_season_index] = cur_s[cur_season_index] + (cur_d+epsilon)*self.gamma
+            cur_d = cur_d + self.alpha*self.beta * epsilon
+            cur_season_index = (cur_season_index + 1) % self.m
 
             old_epsilon = epsilon
 

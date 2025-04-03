@@ -620,7 +620,7 @@ def save_policy(policy, file_name):
 # 6. Apply DP policy to a time series
 ############################################################
 
-def apply_dp(real_prices, ts_model, dp_policy, b):
+def apply_dp(real_prices, ts_model, dp_policy, b, measure_rounding_errors=False):
     """
     Apply the DP policy to a price series.
 
@@ -650,20 +650,30 @@ def apply_dp(real_prices, ts_model, dp_policy, b):
     u_sequence = []
     profit_sequence = []
     b_sequence = []
+    # Optionally track rounding errors
+    abs_rounding_err_sequence = [] if measure_rounding_errors else None
+    rel_rounding_err_sequence = [] if measure_rounding_errors else None
     # check to ensure real_prices and dp_policy have the same length
     if len(real_prices) != len(dp_policy):
         raise ValueError("real_prices and dp_policy must have the same length")
 
     for k in range(len(real_prices)):
         price = real_prices[k]
+        # print(f"Period {k}: price={price}, xk={xk}")
         # Build the KD-tree for nearest neighbor search
         kdtree, index_to_state = _build_state_kdtree(dp_policy[k])
         # pdb.set_trace()
+
         # Find the nearest neighbor match for xk
-        xk_match_idx = kdtree.query(xk)[1]
+        dist, xk_match_idx = kdtree.query(xk)
         xk_match = index_to_state[xk_match_idx]
+        # record the rounding error if needed
+        if measure_rounding_errors:
+            abs_rounding_err_sequence.append(dist)
+            relative_err = dist / (np.linalg.norm(xk) + 1e-8)  # Avoid division by zero
+            rel_rounding_err_sequence.append(relative_err)
+
         # Retrieve the optimal control
-        # print(dp_policy)
         u = dp_policy[k][xk_match].evaluate(b)
         # Record the control
         u_sequence.append(u)
@@ -674,10 +684,17 @@ def apply_dp(real_prices, ts_model, dp_policy, b):
         b += u
         b_sequence.append(b)
         ts_model.update([price])
-        if hasattr(ts_model, 'cur_season_index'):
+        if ts_model.model_name == 'HW':
             xk = (ts_model.cur_l, ts_model.cur_d, *ts_model.cur_s)
-    
-    return profit_sequence, u_sequence, b_sequence
+        if ts_model.model_name == 'AR1':
+            xk = (ts_model.current_state)
+        if ts_model.model_name == 'SARIMA':
+            xk = (ts_model.current_state)
+
+    if measure_rounding_errors:
+        return profit_sequence, u_sequence, b_sequence, abs_rounding_err_sequence, rel_rounding_err_sequence
+    else:
+        return profit_sequence, u_sequence, b_sequence
 
 
 ############################################################
@@ -747,7 +764,7 @@ if __name__ == "__main__":
 
     ############### fit the SARIMA model ################
     ts_model = SARIMA_model(m=4)
-    ts_model.fit(price_train)
+    ts_model.fit(np.concatenate([price_train, price_test[:85 * opt_horizon]]))
     x0 = ts_model.current_state
     # residuals = ts_model.residuals
     # randomness_models = []
@@ -775,12 +792,12 @@ if __name__ == "__main__":
     # print("DP policy:", policy)
 
     ################# Apply DP policy #################
-    with open("SeriesOpt/tests/250311_lpvdp_empiricalerrorbyseason/sarima_semireal_dp_4m8h_policy_0.pkl", 'rb') as f:
+    with open("SeriesOpt/tests/250311_lpvdp_empiricalerrorbyseason/sarima_semireal_dp_4m8h_policy_26.pkl", 'rb') as f:
         policy = pickle.load(f)
     # ar1_model = AR1_model()
     # ar1_model.fit([10, 11, 9, 8, 15, 3, 7, 6])
-    real_prices = np.array([ -6.0956273,  21.94816  , -25.797834 ,   8.950453 , -62.649036 ,
-       124.76675  , -27.281584 , -18.060457 ])
+    real_prices = np.array([18.06915086, 23.68189157, 45.24114021, 38.48568387, 27.4958783 ,
+       21.36200772, 52.44035819, 36.99084592])
     
     # x0 = np.array([4004.847209213908,
     #                 -0.010869743533163162,

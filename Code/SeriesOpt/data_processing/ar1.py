@@ -86,28 +86,26 @@ class AR1_model:
             raise ValueError("Model must be fitted before forecasting")
         
         # If state is provided, use iterative forecasting
-        if state is not None:
-            # Initialize forecasts array
-            forecasts = np.zeros(h)
-            # For stationary AR(1), the process has mean = constant/(1-phi)
-            if abs(self.phi) < 1:  # Stationary case
-                mean = self.constant / (1 - self.phi)
-                # Iterate through forecast horizon
-                for i in range(h):
-                    # The correct forecasting equation for AR(1) with mean:
-                    # x_t = μ + φ(x_{t-1} - μ) = μ(1-φ) + φ*x_{t-1}
-                    forecasts[i] = mean + self.phi * (state - mean)
-                    # Update state for next iteration
-                    state = forecasts[i]
-            else:  # Non-stationary case
-                # Iterate through forecast horizon
-                for i in range(h):
-                    forecasts[i] = self.constant + self.phi * state
-                    state = forecasts[i]
-        else:
-            # Use the model's built-in forecast method
-            forecast_results = self.results.forecast(steps=h)
-            forecasts = np.array(forecast_results)
+        if state is None:
+            state = self.current_state
+
+        # Initialize forecasts array
+        forecasts = np.zeros(h)
+        # For stationary AR(1), the process has mean = constant/(1-phi)
+        if abs(self.phi) < 1:  # Stationary case
+            mean = self.constant / (1 - self.phi)
+            # Iterate through forecast horizon
+            for i in range(h):
+                # The correct forecasting equation for AR(1) with mean:
+                # x_t = μ + φ(x_{t-1} - μ) = μ(1-φ) + φ*x_{t-1}
+                forecasts[i] = mean + self.phi * (state - mean)
+                # Update state for next iteration
+                state = forecasts[i]
+        else:  # Non-stationary case
+            # Iterate through forecast horizon
+            for i in range(h):
+                forecasts[i] = self.constant + self.phi * state
+                state = forecasts[i]
         
         return forecasts
     
@@ -123,9 +121,13 @@ class AR1_model:
         
         # Convert to numpy array if not already
         new_data = np.array(new_data)
-        # For AR(1), updating the state is straightforward - we just need the most recent observation
-        if len(new_data) > 0:
-            self.current_state = [new_data[-1]]
+
+        for val in new_data:
+            fitted_val = self.constant + self.phi * self.current_state
+            # Update the current state with the new observation
+            self.fitted = np.append(self.fitted, fitted_val)
+            self.residual = np.append(self.residuals, val - fitted_val)
+            self.current_state = val  # Update the current state with the new observation
     
     def generate_series(self, n_periods, randomness_model=None):
         """

@@ -157,22 +157,21 @@ class SARIMA_model:
         
         # If state is provided, use the simulate method with zero errors
         # This effectively produces forecasts from the custom state
-        if state is not None:
-            # Convert state to numpy array if it's not already
-            state = np.array(state)
-            # Initialize forecasts array
-            forecasts = np.zeros(h)
-            # Current state for iteration
-            current_state = state.copy()
-            # pdb.set_trace()
-            for i in range(h):
-                # Generate forecast for the next period
-                forecasts[i] = self.Z @ current_state
-                # Update state for the next iteration
-                current_state = self.dp_func_transition(current_state, 0)
-        else:
-            # Use the model's built-in forecast method
-            forecasts = self.results.forecast(steps=h)
+        if state is None:
+            state = self.current_state
+        
+        # Convert state to numpy array if it's not already
+        state = np.array(state)
+        # Initialize forecasts array
+        forecasts = np.zeros(h)
+        # Current state for iteration
+        current_state = state.copy()
+        # pdb.set_trace()
+        for i in range(h):
+            # Generate forecast for the next period
+            forecasts[i] = self.Z @ current_state
+            # Update state for the next iteration
+            current_state = self.dp_func_transition(current_state, 0)
         
         return forecasts
     
@@ -190,22 +189,22 @@ class SARIMA_model:
         new_data = np.array(new_data)
         
         for val in new_data:
-            # update the fitted values
-            self.fitted = np.append(self.fitted, self.results.forecast(steps=1)[-1])
+            # new forecast for the next period
+            forecast = self.forecast(1)
+            # update the fitted values with the new observation
+            self.fitted = np.append(self.fitted, forecast[0])
             # Update the residuals
             self.residuals = np.append(self.residuals, val - self.fitted[-1])
             # Update the state vector with the new observation
             self.current_state = self.dp_func_transition(self.current_state, self.residuals[-1])
-
-
     
-    def generate_series(self, n_periods, randomness_model):
+    def generate_series(self, n_periods, randomness_models):
         """
         Generate a synthetic SARIMA time series
         
         Parameters:
         - n_periods: Number of periods to generate
-        - randomness_model: Model for generating random innovations
+        - randomness_models: Model for generating random innovations
         
         Returns:
         - synthetic_series: Generated time series as a pandas DataFrame
@@ -214,14 +213,14 @@ class SARIMA_model:
             raise ValueError("Model must be fitted before generating series")
         
         # Generate innovations from the randomness model
-        errors = randomness_model.sample(nsamples=n_periods)
         current_state = self.current_state
         simulated = np.zeros(n_periods)
         for i in range(n_periods):
+            error = randomness_models[i % self.m].sample()[0] if len(randomness_models)>1 else randomness_models[0].sample()[0]
             # Generate forecast for the next period
-            simulated[i] = self.Z @ current_state + errors[i]
+            simulated[i] = self.Z @ current_state + error
             # Update the state vector with the generated error
-            current_state = self.dp_func_transition(current_state, errors[i])
+            current_state = self.dp_func_transition(current_state, error)
         
         return simulated
     

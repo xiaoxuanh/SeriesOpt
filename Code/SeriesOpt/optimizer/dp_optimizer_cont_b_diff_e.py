@@ -620,6 +620,54 @@ def save_policy(policy, file_name):
 # 6. Apply DP policy to a time series
 ############################################################
 
+from sklearn.tree import DecisionTreeClassifier
+
+def train_policy_classifier(dp_policy):
+    """
+    Train a classifier to map discrete state vectors (from dp_policy) to a policy label.
+    The policy for each state is represented as a list of tuples (bL, bR, slope, intercept).
+    
+    Parameters:
+      dp_policy: dict, where for each period k, dp_policy[k] is a dict mapping state (tuple)
+                 to a policy (list of tuples).
+    
+    Returns:
+      classifiers: dict mapping period k to a trained classifier.
+      label_mapping: dict mapping period k to a tuple (policy_to_label, label_to_policy).
+                     For each period, policy_to_label maps a hashable policy representation to an integer label,
+                     and label_to_policy maps that label back to the policy (list of tuples).
+    """
+    classifiers = {}
+    label_mapping = {}
+    
+    for k in dp_policy.keys():
+        X = []  # state vectors (as lists of floats)
+        y = []  # labels (integers)
+        policy_to_label = {}
+        label_to_policy = {}
+        next_label = 0
+        
+        for state, policy in dp_policy[k].items():
+            # Convert the state (tuple) to list for classifier input
+            X.append(list(state))
+            # Convert the policy (list of tuples) to a hashable object
+            # We assume that each tuple in policy is (bL, bR, slope, intercept)
+            policy_hashable = tuple(tuple(seg) for seg in policy)
+            if policy_hashable not in policy_to_label:
+                policy_to_label[policy_hashable] = next_label
+                label_to_policy[next_label] = policy  # store the original list of tuples
+                next_label += 1
+            y.append(policy_to_label[policy_hashable])
+        
+        # Train a decision tree classifier for period k
+        clf = DecisionTreeClassifier(max_depth=5, random_state=42)
+        clf.fit(X, y)
+        classifiers[k] = clf
+        label_mapping[k] = (policy_to_label, label_to_policy)
+    
+    return classifiers, label_mapping
+
+
 def apply_dp(real_prices, ts_model, dp_policy, b, measure_rounding_errors=False):
     """
     Apply the DP policy to a price series.
@@ -694,7 +742,81 @@ def apply_dp(real_prices, ts_model, dp_policy, b, measure_rounding_errors=False)
     if measure_rounding_errors:
         return profit_sequence, u_sequence, b_sequence, abs_rounding_err_sequence, rel_rounding_err_sequence
     else:
-        return profit_sequence, u_sequence, b_sequence
+        return profit_sequence, u_sequence, b_sequence, None, None
+
+
+def apply_dp_classifier(real_prices, ts_model, dp_policy, classifiers, label_mapping, b):
+    """
+    Apply the DP policy to a price series using a classifier to map the current state
+    to one of the few unique policy classes.
+    
+    Parameters:
+      real_prices: a list or array (or pandas Series) of real prices.
+      ts_model: time series model object (e.g., HW, AR1, SARIMA) already initialized.
+      dp_policy: the solved DP policy dictionary (by period), where each policy is a list of tuples.
+      classifiers: dict mapping period k to the trained classifier.
+      label_mapping: dict mapping period k to (policy_to_label, label_to_policy).
+      b: initial battery level.
+    
+    Returns:
+      profit_sequence, u_sequence, b_sequence
+    """
+    # Ensure dp_policy elements are in their original form (list of tuples)
+    # (If necessary, you may want to reconvert them to PiecewiseLinearFunction when evaluating.)
+    
+    # Determine the initial state xk based on the model type.
+    if ts_model.model_name == 'HW':
+        xk = (ts_model.cur_l, ts_model.cur_d, *ts_model.cur_s)
+    elif ts_model.model_name == 'AR1':
+        xk = (ts_model.current_state,)
+    elif ts_model.model_name == 'SARIMA':
+        xk = ts_model.current_state
+    else:
+        raise ValueError("Unknown model name")
+    
+    u_sequence = []
+    profit_sequence = []
+    b_sequence = []
+    
+    # Loop through each period
+    for k in range(len(real_prices)):
+        price = real_prices[k]
+        
+        # For period k, predict the policy label using the classifier.
+        clf = classifiers[k]
+        # Convert the state to a list of features; note clf.predict expects a 2D array.
+        predicted_label = clf.predict([list(xk)])[0]
+        
+        # Get the corresponding policy (list of tuples) using the label mapping.
+        label_to_policy = label_mapping[k][1]  # second element is label_to_policy mapping
+        policy_representation = label_to_policy[predicted_label]
+        
+        # Create a PiecewiseLinearFunction from the policy representation.
+        policy_function = PiecewiseLinearFunction(segments=policy_representation)
+        
+        # Evaluate the policy function at battery level b to get control u.
+        u = policy_function.evaluate(b)
+        u_sequence.append(u)
+        
+        # Calculate profit (same as your original formulation).
+        profit = max(u * eta, u / eta) * -price
+        profit_sequence.append(profit)
+        
+        # Update battery level.
+        b += u
+        b_sequence.append(b)
+        
+        # Update the time series model with the new price.
+        ts_model.update([price])
+        if ts_model.model_name == 'HW':
+            xk = (ts_model.cur_l, ts_model.cur_d, *ts_model.cur_s)
+        elif ts_model.model_name == 'AR1':
+            xk = (ts_model.current_state,)
+        elif ts_model.model_name == 'SARIMA':
+            xk = ts_model.current_state
+    
+    return profit_sequence, u_sequence, b_sequence
+
 
 
 ############################################################

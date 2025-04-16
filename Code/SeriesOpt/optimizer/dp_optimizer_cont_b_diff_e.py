@@ -154,45 +154,98 @@ def _interpolate_pwl_across_neighbors(x_kplus1_cont,
                                       kdtree, 
                                       index_to_state, 
                                       memo_kplus1, 
-                                      k=3):
+                                      k=5,
+                                      sigma=None):
     """
     Finds the k nearest discrete states to x_kplus1_cont, retrieves their 
     piecewise-linear cost-to-go, then merges (interpolates) them into a 
-    single PWL function using distance-based weights.
+    single PWL function using Gaussian kernel weights.
 
-    Returns: A PiecewiseLinearFunction instance representing the 
-             weighted combination of the neighbors' PWL.
+    Parameters:
+      x_kplus1_cont: continuous next state (vector)
+      kdtree: KD-tree built from the discrete states (from memo_kplus1)
+      index_to_state: list mapping row index to discrete state tuple
+      memo_kplus1: dict mapping state tuple -> solved PWL (list of segments)
+      k: number of nearest neighbors to use
+      sigma: kernel width parameter. If None, set to median of distances.
+
+    Returns: 
+      A PiecewiseLinearFunction instance representing the weighted combination 
+      of the neighbors' PWL.
     """
     # 1) Query k neighbors
-    # distances: shape (k,)
-    # nn_indices: shape (k,) - indices into index_to_state
-    distances, nn_indices = kdtree.query(x_kplus1_cont, k=k)  
-    # If k=1, they are scalars. If k>1, arrays. Ensure they are arrays:
+    distances, nn_indices = kdtree.query(x_kplus1_cont, k=k)
+    # Ensure arrays if k==1
     if not hasattr(distances, '__len__'):
-        # Means k=1 was used
         distances = np.array([distances])
         nn_indices = np.array([nn_indices])
     
-    # 2) Compute interpolation weights (inverse-distance or similar)
-    #    If any distance=0, to avoid divide-by-zero, 
-    #    you might handle separately or add small epsilon.
-    eps = 1e-8
-    inv_d = 1.0 / (distances + eps)
-    w_sum = np.sum(inv_d)
-    neighbor_weights = inv_d / w_sum
+    # 2) Determine kernel width sigma (if not provided, use median of distances)
+    if sigma is None:
+        sigma = np.median(distances)
+        if sigma < 1e-8:
+            sigma = 1e-3  # Fallback value if distances are too small
+
+    # 3) Compute Gaussian kernel weights: w_i = exp(-dist_i^2 / (2 * sigma^2))
+    weights = np.exp(- (distances ** 2) / (2 * sigma ** 2))
+    weight_sum = np.sum(weights)
+    neighbor_weights = weights / (weight_sum + 1e-8)
     
-    # 3) Retrieve each neighbor's PWL function
+    # 4) Retrieve each neighbor's PWL function
     neighbor_pwls = []
     for (idx_n, w) in zip(nn_indices, neighbor_weights):
         x_kplus1_disc = index_to_state[idx_n]
         segments = memo_kplus1[x_kplus1_disc]
-        # Convert to your PWL class (assuming you have a constructor like below)
         neighbor_pwls.append((w, PiecewiseLinearFunction(segments=segments)))
     
-    # 4) Combine them into one PWL using the same approach as _combine_func
-    combined_pwl = _combine_func(neighbor_pwls)  # re-use the logic from your scenario combiner
-
+    # 5) Combine them into one PWL using the same approach as _combine_func
+    combined_pwl = _combine_func(neighbor_pwls)
     return combined_pwl
+
+
+# def _interpolate_pwl_across_neighbors(x_kplus1_cont, 
+#                                       kdtree, 
+#                                       index_to_state, 
+#                                       memo_kplus1, 
+#                                       k=3):
+#     """
+#     Finds the k nearest discrete states to x_kplus1_cont, retrieves their 
+#     piecewise-linear cost-to-go, then merges (interpolates) them into a 
+#     single PWL function using distance-based weights.
+
+#     Returns: A PiecewiseLinearFunction instance representing the 
+#              weighted combination of the neighbors' PWL.
+#     """
+#     # 1) Query k neighbors
+#     # distances: shape (k,)
+#     # nn_indices: shape (k,) - indices into index_to_state
+#     distances, nn_indices = kdtree.query(x_kplus1_cont, k=k)  
+#     # If k=1, they are scalars. If k>1, arrays. Ensure they are arrays:
+#     if not hasattr(distances, '__len__'):
+#         # Means k=1 was used
+#         distances = np.array([distances])
+#         nn_indices = np.array([nn_indices])
+    
+#     # 2) Compute interpolation weights (inverse-distance or similar)
+#     #    If any distance=0, to avoid divide-by-zero, 
+#     #    you might handle separately or add small epsilon.
+#     eps = 1e-8
+#     inv_d = 1.0 / (distances + eps)
+#     w_sum = np.sum(inv_d)
+#     neighbor_weights = inv_d / w_sum
+    
+#     # 3) Retrieve each neighbor's PWL function
+#     neighbor_pwls = []
+#     for (idx_n, w) in zip(nn_indices, neighbor_weights):
+#         x_kplus1_disc = index_to_state[idx_n]
+#         segments = memo_kplus1[x_kplus1_disc]
+#         # Convert to your PWL class (assuming you have a constructor like below)
+#         neighbor_pwls.append((w, PiecewiseLinearFunction(segments=segments)))
+    
+#     # 4) Combine them into one PWL using the same approach as _combine_func
+#     combined_pwl = _combine_func(neighbor_pwls)  # re-use the logic from your scenario combiner
+
+#     return combined_pwl
 
 # def _lp_terminal_pwl(num_points, p_forecast, Mc_set, Md_set):
 #     """
@@ -718,7 +771,11 @@ def apply_dp(real_prices, ts_model, dp_policy, b, measure_rounding_errors=False)
         # record the rounding error if needed
         if measure_rounding_errors:
             abs_rounding_err_sequence.append(dist)
-            relative_err = dist / (np.linalg.norm(xk) + 1e-8)  # Avoid division by zero
+            grid_points = np.array(index_to_state)
+            min_vec = np.min(grid_points, axis=0)
+            max_vec = np.max(grid_points, axis=0)
+            diameter = np.linalg.norm(max_vec - min_vec)
+            relative_err = dist / (diameter + 1e-8)  # Avoid division by zero
             rel_rounding_err_sequence.append(relative_err)
 
         # Retrieve the optimal control

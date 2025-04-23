@@ -129,7 +129,7 @@ class AR1_model:
             self.residual = np.append(self.residuals, val - fitted_val)
             self.current_state = val  # Update the current state with the new observation
     
-    def generate_series(self, n_periods, randomness_model=None):
+    def generate_series(self, n_periods, randomness_model=None, return_states=False):
         """
         Generate a synthetic AR(1) time series
         
@@ -149,13 +149,18 @@ class AR1_model:
         # Initialize series with the current state
         simulated = np.zeros(n_periods)
         current_value = self.current_state
-        
+        if return_states:
+            states = np.zeros(n_periods)
         for i in range(n_periods):
             # Generate next value: x_t = c + φ*x_{t-1} + ε_t
             next_value = self.constant + self.phi * current_value + errors[i]
             simulated[i] = next_value
             current_value = next_value
+            if return_states:
+                states[i] = current_value
         
+        if return_states:
+            return simulated, states
         return simulated
     
     def dp_func_transition(self, state, epsilon, cur_season_index=None):

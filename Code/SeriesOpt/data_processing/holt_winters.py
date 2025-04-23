@@ -139,7 +139,7 @@ class HW_model:
         self.cur_season_index = season_index
 
 
-    def generate_series(self, n_periods, randomness_models):
+    def generate_series(self, n_periods, randomness_models, return_states=False):
         """
         Generates a synthetic Holt-Winters style time series with random level, trend, and seasonality (optional).
         
@@ -157,29 +157,28 @@ class HW_model:
         synthetic_series = []
         cur_l, cur_d, cur_season_index = self.cur_l, self.cur_d, self.cur_season_index
         cur_s = self.cur_s.copy() # make a copy of the current seasonality values
+        if return_states:
+            states = []
         for t in range(n_periods):
             # Calculate the value at time t
             epsilon = randomness_models[t%self.m].sample()[0] if len(randomness_models)>1 else randomness_models[0].sample()[0]
             value = cur_l + cur_d + cur_s[cur_season_index] + epsilon
-            synthetic_series.append((cur_season_index, cur_l, cur_d, 
-                                 cur_s[cur_season_index], 
-                                 value))
-            
+            synthetic_series.append(value)
             # update level
             cur_l = cur_l + cur_d + self.alpha * epsilon
             cur_s[cur_season_index] = cur_s[cur_season_index] + (cur_d+epsilon)*self.gamma
             cur_d = cur_d + self.alpha*self.beta * epsilon
             cur_season_index = (cur_season_index + 1) % self.m
+            if return_states:
+                states.append((cur_l, cur_d, *cur_s))
 
-        # Convert to pandas DataFrame for easier manipulation
-        synthetic_series = np.array(synthetic_series, dtype=[('seasonality_index', 'i4'), 
-                                                        ('level', 'f4'), 
-                                                        ('trend', 'f4'),
-                                                        ('seasonality_value', 'f4'),  
-                                                        ('value', 'f4')])
-        synthetic_series = pd.DataFrame(synthetic_series, columns=['seasonality_index', 'level', 'trend', 'seasonality_value', 'value'])
-
-        return synthetic_series
+        # Convert to numpy array for easier manipulation
+        synthetic_series = np.array(synthetic_series)
+        if return_states:
+            states = np.array(states)
+            return synthetic_series, states
+        else:
+            return synthetic_series
 
     def generate_series_ARerror(self, n_periods, randomness_model):
         """

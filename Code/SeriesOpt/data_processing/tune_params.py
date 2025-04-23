@@ -36,20 +36,20 @@ def MASE_iderror(actual, predicted, naive_predictions):
     else:
         return mase
 
-# def time_series_cross_val(ts_instance, price_train, params):
-#     """
-#     Perform time series cross-validation to evaluate model performance.
-#     """
-#     tscv = TimeSeriesSplit(n_splits=10)
-#     rmae_scores = []
+def time_series_cross_val(ts_instance, price_train, params):
+    """
+    Perform time series cross-validation to evaluate model performance.
+    """
+    tscv = TimeSeriesSplit(n_splits=10)
+    rmae_scores = []
 
-#     for train_index, test_index in tscv.split(price_train):
-#         train, test = price_train[train_index], price_train[test_index[:opt_horizon]]
-#         ts_instance.fit(train, hyperparams=params)
-#         predictions = ts_instance.forecast(len(test))
-#         rmae_scores.append(rMAE(test, predictions))
+    for train_index, test_index in tscv.split(price_train):
+        train, test = price_train[train_index], price_train[test_index[:opt_horizon]]
+        ts_instance.fit(train, hyperparams=params)
+        predictions = ts_instance.forecast(len(test))
+        rmae_scores.append(rMAE(test, predictions, price_train[-opt_horizon:]))
 
-#     return -np.mean(rmae_scores)  # Negative because Bayesian optimization maximizes
+    return -np.mean(rmae_scores)  # Negative because Bayesian optimization maximizes
 
 def disjoint_time_series_cross_val(ts_instance, price_train, params):
     """
@@ -141,7 +141,7 @@ def grid_search_tune_params(ts_instance, price_train, param_grid):
     keys, values = zip(*param_grid.items())
     for combination in product(*values):
         params = dict(zip(keys, combination))
-        score = disjoint_time_series_cross_val(ts_instance, price_train, params)
+        score = time_series_cross_val(ts_instance, price_train, params)
 
         if score > best_score:
             best_score = score

@@ -19,6 +19,8 @@ import os
 import itertools
 import pickle
 import pdb
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import normalize
 
 Me = Config.get_param('Me')
 Mc = Config.get_param('Mc')
@@ -201,89 +203,6 @@ def _interpolate_pwl_across_neighbors(x_kplus1_cont,
     # 5) Combine them into one PWL using the same approach as _combine_func
     combined_pwl = _combine_func(neighbor_pwls)
     return combined_pwl
-
-
-# def _interpolate_pwl_across_neighbors(x_kplus1_cont, 
-#                                       kdtree, 
-#                                       index_to_state, 
-#                                       memo_kplus1, 
-#                                       k=3):
-#     """
-#     Finds the k nearest discrete states to x_kplus1_cont, retrieves their 
-#     piecewise-linear cost-to-go, then merges (interpolates) them into a 
-#     single PWL function using distance-based weights.
-
-#     Returns: A PiecewiseLinearFunction instance representing the 
-#              weighted combination of the neighbors' PWL.
-#     """
-#     # 1) Query k neighbors
-#     # distances: shape (k,)
-#     # nn_indices: shape (k,) - indices into index_to_state
-#     distances, nn_indices = kdtree.query(x_kplus1_cont, k=k)  
-#     # If k=1, they are scalars. If k>1, arrays. Ensure they are arrays:
-#     if not hasattr(distances, '__len__'):
-#         # Means k=1 was used
-#         distances = np.array([distances])
-#         nn_indices = np.array([nn_indices])
-    
-#     # 2) Compute interpolation weights (inverse-distance or similar)
-#     #    If any distance=0, to avoid divide-by-zero, 
-#     #    you might handle separately or add small epsilon.
-#     eps = 1e-8
-#     inv_d = 1.0 / (distances + eps)
-#     w_sum = np.sum(inv_d)
-#     neighbor_weights = inv_d / w_sum
-    
-#     # 3) Retrieve each neighbor's PWL function
-#     neighbor_pwls = []
-#     for (idx_n, w) in zip(nn_indices, neighbor_weights):
-#         x_kplus1_disc = index_to_state[idx_n]
-#         segments = memo_kplus1[x_kplus1_disc]
-#         # Convert to your PWL class (assuming you have a constructor like below)
-#         neighbor_pwls.append((w, PiecewiseLinearFunction(segments=segments)))
-    
-#     # 4) Combine them into one PWL using the same approach as _combine_func
-#     combined_pwl = _combine_func(neighbor_pwls)  # re-use the logic from your scenario combiner
-
-#     return combined_pwl
-
-# def _lp_terminal_pwl(num_points, p_forecast, Mc_set, Md_set):
-#     """
-#     Compute the terminal condition based on a linear programming approach.
-#     For battery levels between b_min and b_max, sample num_points points.
-#     For each battery level, solve the LP problem with forecast p_forecast 
-#     over the given horizon (e.g. periods 25-48) and return the LP objective 
-#     value. Then, construct a PiecewiseLinearFunction approximating the terminal value.
-#     """
-#     import numpy as np
-#     b_values = np.linspace(0, Me, num_points)
-#     objectives = []
-#     for b in b_values:
-#         lp_controls, lp_obj = lp_optimize(b, p_forecast, opt_horizon, Mc_set, Md_set, return_obj=True)
-#         objectives.append(lp_obj)
-#     segments = []
-#     for i in range(num_points - 1):
-#         bL = b_values[i]
-#         bR = b_values[i+1]
-#         slope = (objectives[i+1] - objectives[i]) / (bR - bL)
-#         intercept = objectives[i] - slope * bL
-#         segments.append((bL, bR, slope, intercept))
-#     # Merge adjacent segments that have nearly identical slopes.
-#     merged_segments = []
-#     if segments:
-#         cur_seg = segments[0]
-#         for seg in segments[1:]:
-#             # If slopes differ less than tolerance, merge segments.
-#             if abs(seg[2] - cur_seg[2]) < 1e-3:
-#                 # Merge: new segment extends from cur_seg[0] to seg[1],
-#                 # using the current slope and intercept from cur_seg.
-#                 cur_seg = (cur_seg[0], seg[1], cur_seg[2], cur_seg[3])
-#             else:
-#                 merged_segments.append(cur_seg)
-#                 cur_seg = seg
-#         merged_segments.append(cur_seg)
-
-#     return PiecewiseLinearFunction(segments=merged_segments)
 
 
 def _build_expected_pwl(
@@ -540,39 +459,129 @@ def _build_Jk_from_Jkplus1(Jkplus1_expected, p, Mc_k, Md_k):
 # 5. DP Optimization
 ############################################################
 
-def _generate_memo(x0, ts_model, randomness_models, opt_horizon):
+def sample_and_cluster_states(
+    x0,
+    ts_model,
+    randomness_models,
+    horizon,
+    n_samples=10000,
+    base_n_clusters=100,
+    min_n_clusters=5,
+    use_cosine=False
+):
+    """
+    Monte Carlo sample-based approximation of the joint state distribution,
+    clustering by period, and include the known initial state at period 0.
+
+    The ts_model.generate_series method returns an array of shape
+    (n_samples, horizon, state_dim), excluding the initial state x0.
+
+    Returns
+    -------
+    dict[int, list[tuple]]
+        Mapping period k (0..horizon-1) to representative states:
+        - period 0: [x0]
+        - periods 1..horizon-1: k cluster centers
+    """
+    # Simulate sample paths: shape (n_samples, horizon+1, state_dim)
+    state_dim = len(x0)
+    sample_series = np.zeros((n_samples, horizon, state_dim))
+
+    # Draw each Monte Carlo sample path
+    for i in range(n_samples):
+        # generate_series returns (prices, states array)
+        _, simulated_states = ts_model.generate_series(
+            horizon,
+            randomness_models,
+            return_states=True
+        )
+        # simulated_states: shape (horizon, state_dim)
+        sample_series[i] = simulated_states
+
+    # compute dispersion metric per period
+    variances = {}
+    for k in range(1, horizon):
+        # trace of covariance matrix
+        cov = np.cov(sample_series[:, k-1, :], rowvar=False)
+        variances[k] = np.trace(cov)
+    max_var = max(variances.values()) if variances else 0
+
+    state_clusters = {}
+    # Period 0: deterministic initial state
+    state_clusters[0] = [tuple(x0)]
+    # For each period k, cluster the sample states
+    for k in range(1, horizon):
+        # determine cluster count proportional to dispersion
+        if max_var > 0:
+            fraction = variances[k] / max_var
+        else:
+            fraction = 1.0
+        n_clusters = int(np.clip(
+            np.ceil(base_n_clusters * fraction),
+            min_n_clusters,
+            base_n_clusters
+        ))
+
+        states_k = sample_series[:, k-1, :]
+        # Optionally normalize to unit vectors for cosine-based clustering
+        if use_cosine:
+            data = normalize(states_k, axis=1)
+        else:
+            data = states_k
+
+        # Fit KMeans (Euclidean, on normalized if use_cosine)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        labels = kmeans.fit_predict(data)
+
+        if use_cosine:
+            # Recover true-space cluster means
+            centers = []
+            for ci in range(n_clusters):
+                members = states_k[labels == ci]
+                if members.size:
+                    centers.append(tuple(members.mean(axis=0)))
+        else:
+            centers = [tuple(c) for c in kmeans.cluster_centers_]
+
+        state_clusters[k] = centers
+
+    return state_clusters
+    
+
+
+def _generate_memo(x0, ts_model, randomness_models, opt_horizon,
+    use_sampling=False,
+    n_samples=10000,
+    base_n_clusters=100,
+    min_n_clusters=5,
+    use_cosine=False
+):
     """
     Initialize dictionary to store the value function J_k(b) for each state tuple. and policy
     """
-    memo = defaultdict(dict) # store the value function J_k(b) for each state tuple
-    state_ranges = ts_model.dp_generate_state_range(x0, randomness_models, opt_horizon) # list (period) of list of states
-
-    # if state_ranges is a dictionary already, i.e. coming from discrete randomness, just use it
-    if isinstance(state_ranges, dict):
-        policy = copy.deepcopy(state_ranges)
-        return state_ranges, policy
-
-    for k in range(opt_horizon):
-        state_keys_k = []
-        # create states within ranges
-        ## the min distance between two states within the same dimension is min_x_step_size
-        ## the max number of states in each dimension is max_num_x_states
-        # for dim in state_ranges[k]:
-        #     num_states = min(max_num_x_states, int((dim[1] - dim[0]) / min_x_step_size) + 1)
-        #     dim_states = np.linspace(dim[0], dim[1], num_states)
-        #     state_keys_k.append(dim_states)
-        # # combine to get all state tuples
-        # state_keys_k = list(product(*state_keys_k))
-        # for efficient implementation below
-        state_keys_k = (
-            itertools.product(*(
-                np.linspace(dim[0], dim[1], min(max_num_x_states, int((dim[1] - dim[0]) / min_x_step_size) + 1))
-                for dim in state_ranges[k]
-            ))
+    if use_sampling:
+        state_by_period = sample_and_cluster_states(
+            x0, ts_model, randomness_models, opt_horizon,
+            n_samples=n_samples, base_n_clusters=base_n_clusters, min_n_clusters=min_n_clusters, use_cosine=use_cosine
         )
-        memo[k] = {state: PiecewiseLinearFunction() for state in state_keys_k}
+    else:
+        state_ranges = ts_model.dp_generate_state_range(x0, randomness_models, opt_horizon)
+        if isinstance(state_ranges, dict):
+            return copy.deepcopy(state_ranges), copy.deepcopy(state_ranges)
+        state_by_period = {}
+        for k in range(opt_horizon):
+            axes = []
+            for dim in state_ranges[k]:
+                n = min(max_num_x_states, int((dim[1]-dim[0])/min_x_step_size)+1)
+                axes.append(np.linspace(dim[0], dim[1], n))
+            state_by_period[k] = [tuple(s) for s in itertools.product(*axes)]
+
+    # Build memo + policy
+    memo = defaultdict(dict)
+    for k, states in state_by_period.items():
+        memo[k] = {tuple(s): PiecewiseLinearFunction() for s in states}
         print(f"Period {k} state space size: {len(memo[k])}")
-    
+        
     policy = copy.deepcopy(memo) # store the optimal policy for each state tuple
 
     return memo, policy
@@ -609,7 +618,8 @@ def _process_state(k, state, memo, randomness_models, ts_model, num_samples, ts_
     return state, Jk, policy_k
 
 
-def dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples, Mc_set=None, Md_set=None):
+def dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples, Mc_set=None, Md_set=None,
+mc_state=True, mc_state_cosine=True):
     """
     Perform dynamic programming optimization for continuous battery levels.
 
@@ -636,7 +646,7 @@ def dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples, Mc_s
     if Md_set is None:
         Md_set = [Md] * opt_horizon
     # 1. initialization
-    memo, policy = _generate_memo(x0, ts_model, randomness_models, opt_horizon)
+    memo, policy = _generate_memo(x0, ts_model, randomness_models, opt_horizon, use_sampling=mc_state, use_cosine=mc_state_cosine)
     # 2. backward induction
     for k in reversed(range(opt_horizon)):
         # ts model specific arguments
@@ -945,12 +955,12 @@ if __name__ == "__main__":
     ts_model = SARIMA_model(m=4)
     ts_model.fit(np.concatenate([price_train, price_test[:85 * opt_horizon]]))
     x0 = ts_model.current_state
-    # residuals = ts_model.residuals
-    # randomness_models = []
-    # for i in range(season):
-    #     data = residuals[i::season]
-    #     model = EmpiricalKDERandomness(data)
-    #     randomness_models.append(model)
+    residuals = ts_model.residuals
+    randomness_models = []
+    for i in range(season):
+        data = residuals[i::season]
+        model = EmpiricalKDERandomness(data)
+        randomness_models.append(model)
     # ############### Generate memoization table ###############
     # # memo, policy = _generate_memo(x0, hw_model, randomness_model, opt_horizon)
     # # for k in range(opt_horizon):
@@ -958,25 +968,26 @@ if __name__ == "__main__":
     # #     print(memo[k].keys())
 
     # ################# DP optimization #################
-    # # turn on when needed
-    # Mc_set = [2, 2, 2, 2, 2, 2, 2, 2]
-    # Md_set = [2, 2, 2, 2, 2, 2, 2, 2]
-    # start = time.time()
-    # x0 = ts_model.current_state
-    # policy, memo = dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples=100, Mc_set=Mc_set, Md_set=Md_set)
-    # end = time.time()
-    # print("DP optimization time:", end-start)
+    # turn on when needed
+    Mc_set = [2, 2, 2, 2, 2, 2, 2, 2]
+    Md_set = [2, 2, 2, 2, 2, 2, 2, 2]
+    start = time.time()
+    x0 = ts_model.current_state
+    policy, memo = dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples=1000, Mc_set=Mc_set, Md_set=Md_set,
+        mc_state=True, mc_state_cosine=True)
+    end = time.time()
+    print("DP optimization time:", end-start)
     # save_policy(policy, "SeriesOpt/tests/dp_cont_policy_4seg2horizon_50sigma.pkl")
     # save_policy(memo, "SeriesOpt/tests/dp_cont_memo_12seg_50sigma.pkl")
     # print("DP policy:", policy)
 
     ################# Apply DP policy #################
-    with open("SeriesOpt/tests/250311_lpvdp_empiricalerrorbyseason/sarima_semireal_dp_4m8h_policy_26.pkl", 'rb') as f:
-        policy = pickle.load(f)
-    # ar1_model = AR1_model()
-    # ar1_model.fit([10, 11, 9, 8, 15, 3, 7, 6])
-    real_prices = np.array([18.06915086, 23.68189157, 45.24114021, 38.48568387, 27.4958783 ,
-       21.36200772, 52.44035819, 36.99084592])
+    # with open("SeriesOpt/tests/250311_lpvdp_empiricalerrorbyseason/sarima_semireal_dp_4m8h_policy_26.pkl", 'rb') as f:
+    #     policy = pickle.load(f)
+    # # ar1_model = AR1_model()
+    # # ar1_model.fit([10, 11, 9, 8, 15, 3, 7, 6])
+    # real_prices = np.array([18.06915086, 23.68189157, 45.24114021, 38.48568387, 27.4958783 ,
+    #    21.36200772, 52.44035819, 36.99084592])
     
     # x0 = np.array([4004.847209213908,
     #                 -0.010869743533163162,
@@ -986,11 +997,11 @@ if __name__ == "__main__":
     #                 -3980.435594682726])
     # ts_instance = HW_model(4, x0[0],x0[1],x0[2:],0)
 
-    profit_sequence, u_sequence, b_sequence = apply_dp(real_prices, ts_model, policy, 0)
-    print("Profit sequence:", profit_sequence)
-    print("Control sequence:", u_sequence)
-    print("Battery sequence:", b_sequence)
-    print("Real prices:", real_prices)
+    # profit_sequence, u_sequence, b_sequence = apply_dp(real_prices, ts_model, policy, 0)
+    # print("Profit sequence:", profit_sequence)
+    # print("Control sequence:", u_sequence)
+    # print("Battery sequence:", b_sequence)
+    # print("Real prices:", real_prices)
 
     ######################### Discrete randomness; synthetic data ############################
     # level = np.random.randint(-10, 30)

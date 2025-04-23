@@ -198,7 +198,7 @@ class SARIMA_model:
             # Update the state vector with the new observation
             self.current_state = self.dp_func_transition(self.current_state, self.residuals[-1])
     
-    def generate_series(self, n_periods, randomness_models):
+    def generate_series(self, n_periods, randomness_models, return_states=False):
         """
         Generate a synthetic SARIMA time series
         
@@ -214,15 +214,21 @@ class SARIMA_model:
         
         # Generate innovations from the randomness model
         current_state = self.current_state
-        simulated = np.zeros(n_periods)
+        simulated_price = np.zeros(n_periods)
+        if return_states:
+            simulated_states = np.zeros((n_periods, len(current_state)))
         for i in range(n_periods):
             error = randomness_models[i % self.m].sample()[0] if len(randomness_models)>1 else randomness_models[0].sample()[0]
             # Generate forecast for the next period
-            simulated[i] = self.Z @ current_state + error
+            simulated_price[i] = self.Z @ current_state + error
             # Update the state vector with the generated error
             current_state = self.dp_func_transition(current_state, error)
+            if return_states:
+                simulated_states[i] = current_state
         
-        return simulated
+        if return_states:
+            return simulated_price, simulated_states
+        return simulated_price
     
     def dp_func_transition(self, state, epsilon, cur_season_index=None):
         """

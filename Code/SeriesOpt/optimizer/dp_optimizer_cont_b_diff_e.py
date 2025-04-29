@@ -465,8 +465,7 @@ def sample_and_cluster_states(
     randomness_models,
     horizon,
     n_samples=10000,
-    base_n_clusters=100,
-    min_n_clusters=5,
+    cluster_schedule: dict[int, int] = None,
     use_cosine=False
 ):
     """
@@ -498,30 +497,37 @@ def sample_and_cluster_states(
         # simulated_states: shape (horizon, state_dim)
         sample_series[i] = simulated_states
 
-    # compute dispersion metric per period
-    variances = {}
-    for k in range(1, horizon):
-        # trace of covariance matrix
-        cov = np.cov(sample_series[:, k-1, :], rowvar=False)
-        variances[k] = np.trace(cov)
-    max_var = max(variances.values()) if variances else 0
-
     state_clusters = {}
     # Period 0: deterministic initial state
     state_clusters[0] = [tuple(x0)]
+    if not cluster_schedule:
+        # compute dispersion metric per period
+        variances = {}
+        for k in range(1, horizon):
+            # trace of covariance matrix
+            cov = np.cov(sample_series[:, k-1, :], rowvar=False)
+            variances[k] = np.trace(cov)
+        max_var = max(variances.values()) if variances else 0
+        min_n_clusters = 10
+        base_n_clusters = 100
+
+    
     # For each period k, cluster the sample states
     for k in range(1, horizon):
-        # determine cluster count proportional to dispersion
-        if max_var > 0:
-            fraction = variances[k] / max_var
+        if not cluster_schedule:
+            # determine cluster count proportional to dispersion
+            if max_var > 0:
+                fraction = variances[k] / max_var
+            else:
+                fraction = 1.0
+            n_clusters = int(np.clip(
+                np.ceil(base_n_clusters * fraction),
+                min_n_clusters,
+                base_n_clusters
+            ))
         else:
-            fraction = 1.0
-        n_clusters = int(np.clip(
-            np.ceil(base_n_clusters * fraction),
-            min_n_clusters,
-            base_n_clusters
-        ))
-
+            n_clusters = cluster_schedule[k]
+        
         states_k = sample_series[:, k-1, :]
         # Optionally normalize to unit vectors for cosine-based clustering
         if use_cosine:
@@ -552,8 +558,7 @@ def sample_and_cluster_states(
 def _generate_memo(x0, ts_model, randomness_models, opt_horizon,
     use_sampling=False,
     n_samples=10000,
-    base_n_clusters=100,
-    min_n_clusters=5,
+    cluster_schedule=None,
     use_cosine=False
 ):
     """
@@ -562,7 +567,7 @@ def _generate_memo(x0, ts_model, randomness_models, opt_horizon,
     if use_sampling:
         state_by_period = sample_and_cluster_states(
             x0, ts_model, randomness_models, opt_horizon,
-            n_samples=n_samples, base_n_clusters=base_n_clusters, min_n_clusters=min_n_clusters, use_cosine=use_cosine
+            n_samples=n_samples, cluster_schedule=cluster_schedule, use_cosine=use_cosine
         )
     else:
         state_ranges = ts_model.dp_generate_state_range(x0, randomness_models, opt_horizon)
@@ -619,7 +624,7 @@ def _process_state(k, state, memo, randomness_models, ts_model, num_samples, ts_
 
 
 def dp_optimize_cont_b_diff_e(x0, ts_model, randomness_models, num_samples, Mc_set=None, Md_set=None,
-mc_state=True, mc_state_cosine=True):
+mc_state=True, mc_state_cosine=True, cluster_schedule=None):
     """
     Perform dynamic programming optimization for continuous battery levels.
 
@@ -646,7 +651,7 @@ mc_state=True, mc_state_cosine=True):
     if Md_set is None:
         Md_set = [Md] * opt_horizon
     # 1. initialization
-    memo, policy = _generate_memo(x0, ts_model, randomness_models, opt_horizon, use_sampling=mc_state, use_cosine=mc_state_cosine)
+    memo, policy = _generate_memo(x0, ts_model, randomness_models, opt_horizon, use_sampling=mc_state, use_cosine=mc_state_cosine, cluster_schedule=cluster_schedule)  # updated to include cluster_schedule)
     # 2. backward induction
     for k in reversed(range(opt_horizon)):
         # ts model specific arguments
